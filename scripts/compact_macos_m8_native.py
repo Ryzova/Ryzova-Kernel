@@ -52,6 +52,7 @@ def qualify_guest_commit(image, output, binaries, url, setup, program, runner_sh
         expected[path] = sha256(output/database)
         for name, sql, stdout in (
                 ('commit', 'BEGIN;INSERT INTO items VALUES(73);COMMIT;', b''),
+                ('rollback', 'BEGIN;INSERT INTO items VALUES(99);SELECT id FROM items WHERE id=99;ROLLBACK;', b'99\n'),
                 ('reopen', 'SELECT id FROM items ORDER BY id;PRAGMA integrity_check;', b'42\n73\nok\n')):
             filename = f'{arch}-guest-{name}.rc'
             script = output/filename
@@ -75,7 +76,31 @@ def qualify_guest_commit(image, output, binaries, url, setup, program, runner_sh
     for path, digest in expected.items():
         if digest_line(log, path) != digest:
             raise ValueError(f'native SQLite commit evidence differs for {path}')
-    return dict(architectures=sorted(binaries), committed_row=73, process_reopen_verified=True)
+    reboot = [setup, f'mkdir -p {mount}',
+              f'{server} -F -S -n sqlitefs -f /dev/sd01/data >/tmp/sqlitefs.log >[2=1]',
+              f'mount -nc /srv/sqlitefs {mount} && echo STORAGE_REMOUNTED',
+              f'sha1sum -2 256 {program}']
+    required = {3: 'STORAGE_REMOUNTED'}
+    hashes = {program: runner_sha}
+    for arch, (binary, binary_sha) in binaries.items():
+        path = f'/tmp/m8-{arch}'
+        script = f'{arch}-guest-reopen.rc'
+        prefix = f'/tmp/reboot-{arch}'
+        reboot.extend([f'hget {url}/{binary} >{path}; sha1sum -2 256 {path}',
+                       f'hget {url}/{script} >/tmp/{script}; sha1sum -2 256 /tmp/{script}'])
+        marker = f'REBOOT_{arch}_OK'
+        required[len(reboot)] = marker
+        reboot.append(f'if(rc /tmp/{script} >{prefix}.out >[2]{prefix}.err) echo {marker}; if not cat {prefix}.err')
+        reboot.append(f'sha1sum -2 256 {prefix}.out {prefix}.err')
+        hashes.update({path: binary_sha, '/tmp/'+script: sha256(output/script),
+                       prefix+'.out': hashlib.sha256(b'42\n73\nok\n').hexdigest(),
+                       prefix+'.err': hashlib.sha256(b'').hexdigest()})
+    log = session(image, reboot, output, 'disk-rollback-reboot', 180, required, resource=resource)
+    for path, digest in hashes.items():
+        if digest_line(log, path) != digest:
+            raise ValueError(f'post-rollback reboot mismatch: {path}')
+    return dict(architectures=sorted(binaries), committed_row=73, rolled_back_row=99,
+                process_reopen_verified=True, rollback_reboot_verified=True)
 
 
 
