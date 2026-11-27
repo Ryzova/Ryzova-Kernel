@@ -54,16 +54,17 @@ valid_name(const char *name)
 
 #ifdef MAC_PLAN9
 static int
-ordinary(Dir *file)
+ordinary(Dir *file, int exclusive)
 {
-    return file!=nil && file->qid.type==0 && (file->mode&~0777UL)==0 &&
+    return file!=nil && file->qid.type==(exclusive ? QTEXCL : 0) &&
+           (file->mode&~0777UL)==(exclusive ? DMEXCL : 0) &&
            file->type==root_identity->type && file->dev==root_identity->dev &&
            file->length>=0 && file->length<=MaxFile;
 }
 #endif
 
-int
-mac_grant_open(const char *name)
+static int
+grant_open(const char *name, int exclusive)
 {
     int fd;
 #ifdef MAC_PLAN9
@@ -74,14 +75,14 @@ mac_grant_open(const char *name)
         return -1;
     snprint(path, sizeof path, "/mnt/%s", name);
     before = dirstat(path);
-    if(!ordinary(before)){
+    if(!ordinary(before, exclusive)){
         free(before);
         return -1;
     }
     fd = open(path, ORDWR);
     if(fd>=0){
         after = dirfstat(fd);
-        if(!ordinary(after) || after->qid.path!=before->qid.path){
+        if(!ordinary(after, exclusive) || after->qid.path!=before->qid.path){
             close(fd);
             fd = -1;
         }
@@ -89,6 +90,7 @@ mac_grant_open(const char *name)
     }
     free(before);
 #else
+    struct flock lock = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
     struct open_how how = {
         .flags = O_RDWR|O_NONBLOCK|O_CLOEXEC,
         .resolve = RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV
@@ -99,12 +101,42 @@ mac_grant_open(const char *name)
         return -1;
     fd = syscall(SYS_openat2, rootfd, name, &how, sizeof how);
     if(fd>=0 && (fstat(fd, &file)<0 || !S_ISREG(file.st_mode) ||
-                 file.st_nlink!=1 || file.st_size<0 || file.st_size>MaxFile)){
+                 file.st_nlink!=1 || file.st_size<0 || file.st_size>MaxFile ||
+                 (exclusive && fcntl(fd, F_OFD_SETLK, &lock)<0))){
         close(fd);
         fd = -1;
     }
 #endif
     return fd;
+}
+
+int
+mac_grant_open(const char *name)
+{
+    return grant_open(name, 0);
+}
+
+int
+mac_grant_open_database(const char *name)
+{
+    /* Require single-opener storage on Plan 9; hold a whole-file OFD lock on Linux. */
+    return grant_open(name, 1);
+}
+
+long
+mac_grant_size(int fd)
+{
+#ifdef MAC_PLAN9
+    Dir *file = dirfstat(fd);
+    long size = ordinary(file, 1) ? (long)file->length : -1;
+    free(file);
+    return size;
+#else
+    struct stat file;
+    if(fstat(fd, &file)<0 || file.st_size<0 || file.st_size>MaxFile)
+        return -1;
+    return (long)file.st_size;
+#endif
 }
 
 long

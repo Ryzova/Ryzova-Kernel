@@ -666,15 +666,49 @@ static int tick(CwMachine *m,int windows_bootstrap) {
             for(i=0;i<n;i++)v=(v<<8)|((a>>(8*i))&255);
             put(&d,regop(&d,reg,n),n,v);
         }
+        else if(second==0x66 && d.prefix==0x66){ /* PCMPGTD */
+            unsigned char source[16];
+            unsigned int i;
+            o=operand(&d,&reg,&group,8);
+            if(o.reg<0 && (address(&d,o)&15))return CW_MEMORY;
+            d.error=xmm_read(&d,o,source,16);
+            if(!d.error)for(i=0;i<16;i+=4){
+                int32_t left=(int32_t)xmm_low(m->xmm[reg]+i,4);
+                int32_t right=(int32_t)xmm_low(source+i,4);
+                memset(m->xmm[reg]+i,left>right?255:0,4);
+            }
+        }
+        else if(second==0x72 && d.prefix==0x66){ /* PSLLD xmm, imm8 */
+            unsigned int i,shift;
+            o=operand(&d,&reg,&group,8);
+            if(o.reg<0 || group!=6)return CW_OPCODE;
+            shift=(unsigned int)fetch(&d,1);
+            if(!d.error)for(i=0;i<16;i+=4){
+                uint32_t word=(uint32_t)xmm_low(m->xmm[o.reg]+i,4);
+                xmm_put(m->xmm[o.reg]+i,4,shift<32?word<<shift:0);
+            }
+        }
         else if(second==0x3a && d.prefix==0x66){
             unsigned int lane,width=(d.rex&8)?8:4;
             unsigned int third=(unsigned int)fetch(&d,1);
+            if(third==0x0e){ /* PBLENDW */
+                unsigned char source[16];
+                unsigned int i;
+                o=operand(&d,&reg,&group,8);
+                lane=(unsigned int)fetch(&d,1);
+                if(o.reg<0 && (address(&d,o)&15))return CW_MEMORY;
+                if(!d.error)d.error=xmm_read(&d,o,source,16);
+                if(!d.error)for(i=0;i<8;i++){
+                    if(lane&(1U<<i))memcpy(m->xmm[reg]+2*i,source+2*i,2);
+                }
+            }else{
             if(third==0x20)width=1; /* PINSRB */
             else if(third!=0x22)return CW_OPCODE; /* PINSRD/PINSRQ */
             o=operand(&d,&reg,&group,width==1?4:width);
             lane=(unsigned int)fetch(&d,1)&(16/width-1);
             v=get(&d,o,width);
             if(!d.error)xmm_put(m->xmm[reg]+lane*width,width,v);
+            }
         }
         else if(second==0xfe && d.prefix==0x66){ /* PADDD */
             unsigned char source[16];
