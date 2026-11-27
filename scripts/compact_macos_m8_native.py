@@ -173,7 +173,40 @@ def verify(image, bootstrap, references, output, sqlite=False):
                 commands.append(f'if(! test -e /tmp/c2m/{CREATED_NAME}) echo M8_C2_CREATED_ABSENT')
                 commands.append(f'sha1sum -2 256 {GUEST_INPUT} {CANARY_PATH}')
             if sqlite:
-                run = session(image, commands, output, 'fresh', 120, markers)
+                commands.append('echo sync >> /srv/hjfs.cmd; sleep 3')
+                run = session(image, commands, output, 'fresh', 180, markers)
+                reboot_commands = [setup, f'sha1sum -2 256 {program}']
+                required = {}
+                for arch, (name, _) in binaries.items():
+                    path = f'/tmp/m8-{arch}'
+                    script = f'{arch}-disk_read.rc'
+                    reboot_commands.extend([
+                        f'hget {url}/{name} >{path}; sha1sum -2 256 {path}',
+                        f'hget {url}/{script} >/tmp/{script}; sha1sum -2 256 /tmp/{script}',
+                        f'sha1sum -2 256 /usr/glenda/sqlite-{arch}/phase4.db',
+                    ])
+                    marker = f'M8_REOPEN_{arch}_OK'
+                    required[len(reboot_commands)] = marker
+                    reboot_commands.extend([
+                        f'rc /tmp/{script} >{path}.out >[2]{path}.err && echo {marker}',
+                        f'sha1sum -2 256 {path}.out {path}.err',
+                    ])
+                reboot = session(image, reboot_commands, output, 'disk-reopen', 150, required)
+                if digest_line(reboot, program) != runner_sha:
+                    raise ValueError('database reboot runtime digest differs')
+                for arch, (_, binary_digest) in binaries.items():
+                    path = f'/tmp/m8-{arch}'
+                    script = f'{arch}-disk_read.rc'
+                    expected = cases_by_arch[arch]['disk_read']
+                    hashes = {
+                        path: binary_digest,
+                        '/tmp/'+script: sha256(output/script),
+                        f'/usr/glenda/sqlite-{arch}/phase4.db': sha256(output/f'{arch}.db'),
+                        path+'.out': hashlib.sha256(bytes.fromhex(expected['stdout_hex'])).hexdigest(),
+                        path+'.err': hashlib.sha256(bytes.fromhex(expected['stderr_hex'])).hexdigest(),
+                    }
+                    if any(digest_line(reboot, name) != digest for name, digest in hashes.items()):
+                        raise ValueError(f'{arch}: rebooted database read differs')
             else:
                 with route_fixture(commit) as route:
                     commands.extend(mount_commands(route))
@@ -257,6 +290,7 @@ def verify(image, bootstrap, references, output, sqlite=False):
                    launcher='--run')
     if sqlite:
         receipt['sqlite_profile_qualified'] = True
+        receipt['imported_database_reopened_after_reboot'] = True
     else:
         input_digest = hashlib.sha256(INPUT).hexdigest()
         if any(digest_line(run, name) != input_digest for name in ('/tmp/m8-input-original', GUEST_INPUT)):
