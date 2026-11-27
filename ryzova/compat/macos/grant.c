@@ -2,7 +2,9 @@
 #ifdef MAC_PLAN9
 #include <u.h>
 #include <libc.h>
+#ifdef MAC_SQLITE_JOURNAL
 #include "../windows/sync_protocol.h"
+#endif
 #else
 #define _GNU_SOURCE
 #include <fcntl.h>
@@ -32,11 +34,13 @@ pin_root(char *path, int flags)
     return root_identity!=nil && (root_identity->mode&DMDIR)!=0;
 }
 
+#ifdef MAC_SQLITE_JOURNAL
 int
 mac_grant_init_journal_root(char *path)
 {
     return pin_root(path, MREPL|MCREATE);
 }
+#endif
 #endif
 
 int
@@ -176,7 +180,7 @@ mac_grant_close(int fd)
     close(fd);
 }
 
-#ifdef MAC_PLAN9
+#ifdef MAC_SQLITE_JOURNAL
 static int barrier = -1, journal_failed;
 static CwSyncNonce nonce;
 static char journal_path[sizeof "/mnt/" + MaxName];
