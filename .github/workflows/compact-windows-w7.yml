@@ -25,6 +25,7 @@ on:
       - '.github/workflows/compact-windows-w7.yml'
   pull_request:
     paths:
+      - '.github/workflows/phase3-native-build.yml'
       - 'scripts/compact_c2_*.py'
       - 'scripts/compact_c3_*.py'
       - 'scripts/compact_c1_jq_contract.py'
