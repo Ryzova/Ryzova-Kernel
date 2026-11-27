@@ -2,6 +2,7 @@
 """Pin the SQLite shell references and measure Compact macOS loader admission."""
 import argparse
 import ctypes as C
+import fcntl
 import hashlib
 import io
 import json
@@ -284,49 +285,127 @@ def check_database_open(lib, arch, image, arena, database_bytes):
 
     size_callback = C.CFUNCTYPE(C.c_long, C.c_int)
 
+    action = C.CFUNCTYPE(C.c_int, C.c_int)
+    open_callback = C.CFUNCTYPE(C.c_int, C.c_int, C.c_int)
+
+    class Journal(C.Structure):
+        _fields_ = [('open', open_callback), ('close', action),
+                    ('remove', action), ('sync', action)]
+
     class Database(C.Structure):
         _fields_ = [('name', C.c_char_p), ('fd', C.c_int), ('exclusive', C.c_int),
-                    ('size', size_callback), ('read_at', io_callback), ('write_at', io_callback)]
+                    ('size', size_callback), ('read_at', io_callback), ('write_at', io_callback), ('journal', C.POINTER(Journal))]
 
     @io_callback
     def read_at(fd, dest, size, offset):
-        data = os.pread(fd, size, offset)
+        try:
+            data = os.pread(fd, size, offset)
+        except OSError:
+            return -1
         C.memmove(dest, data, len(data))
         return len(data)
 
     @io_callback
     def write_at(fd, src, size, offset):
-        return os.pwrite(fd, C.string_at(src, size), offset)
+        try:
+            return os.pwrite(fd, C.string_at(src, size), offset)
+        except OSError:
+            return -1
 
     lib.mac9_run_database.argtypes = lib.mac9_run.argtypes[:-1]+[C.POINTER(Database), C.POINTER(Stop)]
     argv = [b'sqlite3', b'-batch', b'-noheader', b'-init', b'/dev/null',
             b'phase4.db', b'SELECT id FROM items ORDER BY id;PRAGMA integrity_check;']
     stop = Stop()
-    with tempfile.TemporaryFile() as file:
-        import fcntl
-        file.write(database_bytes)
-        file.flush()
-        fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        database = Database(b'phase4.db', file.fileno(), 1, size_callback(lambda fd: os.fstat(fd).st_size), read_at, write_at)
-        def execute(args):
-            return lib.mac9_run_database(image, len(image), arena, len(arena), GUARD, len(args),
-                                        (C.c_char_p*len(args))(*args), 16777216, None, None, 0,
-                                        C.byref(database), C.byref(stop))
+    with tempfile.TemporaryDirectory() as work:
+        path = Path(work)/'phase4.db'
+        journal_path = Path(work)/'phase4.db-journal'
+        path.write_bytes(database_bytes)
+        events = []
 
-        status = execute(argv[:-1]+[b'BEGIN;INSERT INTO items VALUES(73);COMMIT;'])
-        file.seek(0)
-        error = bytes(stop.stderr_data[:stop.stderr_bytes])
-        if ((status, stop.exit_code, stop.stdout_bytes, error) !=
-                (2, 1, 0, b'Error in attempt to write a readonly database\n') or file.read()!=database_bytes):
-            raise ValueError(f'{arch}: database-only grant did not reject the transaction cleanly')
-        status = execute(argv)
-        file.seek(0)
-        actual = bytes(stop.stdout_data[:stop.stdout_bytes])
-        if (status, stop.exit_code, actual, stop.stderr_bytes, file.read()) != (
-                2, 0, b'42\nok\n', 0, database_bytes):
-            raise ValueError(f'{arch}: file-backed SQLite read or integrity check failed')
-    return dict(stdout_hex=actual.hex(), steps=stop.steps, database_sha256=sha256(database_bytes),
-                transaction_without_journal_grant_rejected=True)
+        @open_callback
+        def open_journal(fd, create):
+            if not create:
+                return -1
+            try:
+                return os.open(journal_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+            except OSError:
+                return -1
+
+        @action
+        def close_journal(fd):
+            try:
+                os.close(fd)
+                return 0
+            except OSError:
+                return -1
+
+        def sync_directory():
+            directory = os.open(work, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+
+        @action
+        def remove_journal(fd):
+            try:
+                journal_path.unlink()
+                sync_directory()
+                events.append('remove')
+                return 0
+            except OSError:
+                return -1
+
+        @action
+        def sync_file(fd):
+            try:
+                os.fsync(fd)
+                if fd != database.fd:
+                    sync_directory()
+                events.append('database' if fd == database.fd else 'journal')
+                return 0
+            except OSError:
+                return -1
+
+        journal = Journal(open_journal, close_journal, remove_journal, sync_file)
+        with path.open('r+b') as file:
+            fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            database = Database(b'phase4.db', file.fileno(), 1,
+                                size_callback(lambda fd: os.fstat(fd).st_size), read_at, write_at)
+
+            def execute(sql):
+                args = argv[:-1]+[sql]
+                status = lib.mac9_run_database(image, len(image), arena, len(arena), GUARD, len(args),
+                                               (C.c_char_p*len(args))(*args), 16777216, None, None, 0,
+                                               C.byref(database), C.byref(stop))
+                return (status, stop.exit_code, bytes(stop.stdout_data[:stop.stdout_bytes]),
+                        bytes(stop.stderr_data[:stop.stderr_bytes]))
+
+            insert = b'BEGIN;INSERT INTO items VALUES(73);COMMIT;'
+            expected_error = b'Error in attempt to write a readonly database\n'
+            if execute(insert) != (2, 1, b'', expected_error) or path.read_bytes() != database_bytes:
+                raise ValueError(f'{arch}: database-only grant did not preserve bytes')
+            if execute(argv[-1]) != (2, 0, b'42\nok\n', b'') or path.read_bytes() != database_bytes:
+                raise ValueError(f'{arch}: file-backed SQLite read differs')
+            read_steps = stop.steps
+            database.journal = C.pointer(journal)
+            if execute(insert) != (2, 0, b'', b'') or journal_path.exists():
+                raise ValueError(f'{arch}: file-backed SQLite commit failed')
+            if not events or events[-1] != 'remove' or 'database' not in events or 'journal' not in events:
+                raise ValueError(f'{arch}: commit did not sync database and journal')
+            if events.index('journal') > events.index('database'):
+                raise ValueError(f'{arch}: database synced before the journal')
+
+        with path.open('r+b') as file:
+            fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            database.fd = file.fileno()
+            database.journal = None
+            if execute(argv[-1]) != (2, 0, b'42\n73\nok\n', b''):
+                raise ValueError(f'{arch}: committed SQLite row missing on reopen')
+    return dict(stdout_hex=b'42\nok\n'.hex(), steps=read_steps,
+                database_sha256=sha256(database_bytes),
+                transaction_without_journal_grant_rejected=True,
+                hosted_journal_commit_reopened=True, commit_events=events)
 
 
 def check_execution(lib, arch, image, cases, database_bytes):

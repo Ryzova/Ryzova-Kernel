@@ -32,6 +32,16 @@ int mac8_run(const unsigned char *, unsigned int, unsigned char *, unsigned int,
 /* M9 accepts one immutable input under a caller-selected guest basename.
  * The name, bytes and argv remain valid for the duration of the run. */
 int mac9_grant_name(const char *);
+/* An optional rollback journal belongs to the same exclusive database grant.
+ * The caller must refuse a grant with a pre-existing journal until recovery is supported.
+ * Open and remove accept the already-pinned database descriptor as context. */
+typedef struct Mac9Journal Mac9Journal;
+struct Mac9Journal {
+    int (*open)(int, int);
+    int (*close)(int);
+    int (*remove)(int);
+    int (*sync)(int);
+};
 typedef struct Mac9Database Mac9Database;
 struct Mac9Database {
     const char *name;
@@ -39,6 +49,7 @@ struct Mac9Database {
     long (*size)(int);
     long (*read_at)(int, void *, unsigned int, unsigned long);
     long (*write_at)(int, const void *, unsigned int, unsigned long);
+    const Mac9Journal *journal;
 };
 int mac9_run_database(const unsigned char *, unsigned int, unsigned char *, unsigned int,
              unsigned long long, unsigned int, const char *const *, unsigned int,

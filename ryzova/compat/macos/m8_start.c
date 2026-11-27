@@ -277,7 +277,7 @@ struct GuestMutex {
 typedef struct Thread Thread;
 struct Thread {
     Mac9Database *database;
-    int database_open, database_writable;
+    int database_open, database_writable, journal_fd;
     Word sigint;
     GuestMutex mutexes[MutexLimit];
     Word values[KeyLimit];
@@ -292,6 +292,18 @@ static int
 database_path(Thread *thread, const unsigned char *path)
 {
     return thread->database && !strcmp((const char *)path+(*path=='/'), thread->database->name);
+}
+
+static int
+journal_path(Thread *thread, const unsigned char *path)
+{
+    unsigned int length;
+    const char *basename = (const char *)path+(*path=='/');
+    if(!thread->database || !thread->database->journal)
+        return 0;
+    length = strlen(thread->database->name);
+    return !strncmp(basename, thread->database->name, length) &&
+           !strcmp(basename+length, "-journal");
 }
 
 static GuestMutex *
@@ -506,8 +518,8 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, i);
             *result = (unsigned int)-1;
         }
-    }else if((!strcmp(name, "_fstat") || !strcmp(name, "_fstat$INODE64")) && a0==3 && thread->database_open){
-        long size = thread->database->size(thread->database->fd);
+    }else if((!strcmp(name, "_fstat") || !strcmp(name, "_fstat$INODE64")) && ((a0==3 && thread->database_open) || (a0==4 && thread->journal_fd>=0))){
+        long size = thread->database->size(a0==4 ? thread->journal_fd : thread->database->fd);
         if(size<0){
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 5);
             *result = (unsigned int)-1;
@@ -518,7 +530,7 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             memset(dest, 0, 144);
             write_le(dest+4, 2, 0100600);
             write_le(dest+6, 2, 1);
-            write_le(dest+8, 8, 3);
+            write_le(dest+8, 8, a0);
             write_le(dest+96, 8, size);
             write_le(dest+112, 4, 4096);
         }
@@ -735,6 +747,15 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
                 return 1;
             }
         }
+        if(journal_path(thread, left) && thread->database_open &&
+           thread->database_writable && thread->journal_fd<0 &&
+           !(a1 & ~(Word)(0x1000000|0x200|0x100|2)) && (a1&2)){
+            thread->journal_fd = thread->database->journal->open(thread->database->fd, (a1&0x200)!=0);
+            if(thread->journal_fd>=0){
+                *result = 4;
+                return 1;
+            }
+        }
         write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4,
                  !strcmp((const char *)left, "/dev/urandom") ? 2 : 13);
         *result = (unsigned int)-1;
@@ -754,7 +775,7 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
                 return 1;
             }
         }
-        if(name[1]=='f' && (a0!=3 || !thread->database_open)){
+        if(name[1]=='f' && !((a0==3 && thread->database_open) || (a0==4 && thread->journal_fd>=0))){
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 9);
             *result = (unsigned int)-1;
         }else{
@@ -788,21 +809,47 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, thread->database->exclusive ? 22 : 35);
             *result = (unsigned int)-1;
         }
+    }else if(!strcmp(name, "_unlink") && thread->database && thread->database->journal){
+        count = string_length(plan, arena, stack, a0, PathBytes);
+        if(count<0)
+            return -1;
+        left = guest_read(plan, arena, stack, a0, count+1, 1);
+        if(!left)
+            return -1;
+        if(!journal_path(thread, left) || thread->journal_fd>=0 ||
+           !thread->database_writable || thread->database->journal->remove(thread->database->fd)<0){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 13);
+            *result = (unsigned int)-1;
+        }
+    }else if(!strcmp(name, "_close") && a0==4 && thread->journal_fd>=0){
+        if(thread->database->journal->close(thread->journal_fd)<0){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 5);
+            *result = (unsigned int)-1;
+        }
+        thread->journal_fd = -1;
+    }else if(!strcmp(name, "_fsync") && thread->database && thread->database->journal &&
+             ((a0==3 && thread->database_open) || (a0==4 && thread->journal_fd>=0))){
+        if(thread->database->journal->sync(a0==3 ? thread->database->fd : thread->journal_fd)<0){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 5);
+            *result = (unsigned int)-1;
+        }
     }else if(!strcmp(name, "_close") && a0==3 && thread->database_open){
         thread->database_open = 0;
-    }else if((!strcmp(name, "_pread") || !strcmp(name, "_pwrite")) && a0==3 && thread->database_open){
+    }else if((!strcmp(name, "_pread") || !strcmp(name, "_pwrite")) &&
+             ((a0==3 && thread->database_open) || (a0==4 && thread->journal_fd>=0))){
+        int file_fd = a0==3 ? thread->database->fd : thread->journal_fd;
         long transferred = -1;
         if(a3<=65536 && a2<=65536-a3){
             if(!strcmp(name, "_pread")){
                 dest = guest_write(plan, arena, stack, a1, (unsigned int)a2, 1);
                 if(!dest)
                     return -1;
-                transferred = thread->database->read_at(thread->database->fd, dest, a2, a3);
+                transferred = thread->database->read_at(file_fd, dest, a2, a3);
             }else if(thread->database_writable){
                 left = guest_read(plan, arena, stack, a1, (unsigned int)a2, 1);
                 if(!left)
                     return -1;
-                transferred = thread->database->write_at(thread->database->fd, left, a2, a3);
+                transferred = thread->database->write_at(file_fd, left, a2, a3);
             }
         }
         if(transferred<0)
@@ -2300,6 +2347,10 @@ mac9_run_database(const unsigned char *image, unsigned int length, unsigned char
     int status = 0;
     if(database && (!mac9_grant_name(database->name) || database->fd<0 || !database->size || !database->read_at || !database->write_at))
         return 0;
+    if(database && database->journal &&
+       (!database->exclusive || !database->journal->open || !database->journal->close ||
+        !database->journal->remove || !database->journal->sync))
+        return 0;
     if(!out || !arena || capacity<StackBytes || !argc || argc>(Envp-Argv)/8-1 ||
        !argv || !budget || budget>Mac8MaxBudget || input_bytes>Mac8InputLimit ||
        (input ? !mac9_grant_name(input_name) : input_name || input_bytes))
@@ -2337,6 +2388,7 @@ mac9_run_database(const unsigned char *image, unsigned int length, unsigned char
     if(!heap)
         return 0;
     heap->count = 0;
+    thread.journal_fd = -1;
     thread.database = database;
     thread.input = input;
     thread.input_name = input_name;
@@ -2345,6 +2397,8 @@ mac9_run_database(const unsigned char *image, unsigned int length, unsigned char
         status = intel_start(&plan, image, arena, stack, guard!=0, argc, budget, heap, &thread, out);
     else if(plan.cpu==Arm64)
         status = arm_start(&plan, image, arena, stack, guard!=0, argc, budget, heap, &thread, out);
+    if(thread.journal_fd>=0)
+        database->journal->close(thread.journal_fd);
     free(heap);
     return status;
 }
