@@ -30,6 +30,12 @@ main(int argc, char **argv)
     static const char *query[] = {
         "jq", "-c", "{count: (.items | length), sum: (.items | add)}", "input.json"
     };
+    static const Mac9Journal journal = {
+        mac_grant_journal_open, mac_grant_journal_close,
+        mac_grant_journal_remove, mac_grant_journal_sync
+    };
+    int barrier = -1;
+    char *barrier_path = nil;
     int fd, status, version = 0, at, guest_argc = 0;
     unsigned int image_bytes, input_bytes = 0;
     unsigned char *image, *arena, *input = nil;
@@ -64,13 +70,19 @@ main(int argc, char **argv)
             database_dir = argv[at+2];
             at += 3;
         }
+        else if(argc>=9 && !strcmp(argv[at], "--database-journal")){
+            database.name = argv[at+1];
+            database_dir = argv[at+2];
+            barrier_path = argv[at+3];
+            at += 4;
+        }
         if(argc-at<3 || strcmp(argv[at+1], "--") || !argv[at+2][0])
             sysfatal("expected MACH-O -- ARGV0 [ARG ...]");
         image_path = argv[at];
         guest_argc = argc-at-2;
         guest_argv = (const char *const *)(argv+at+2);
     }else
-        sysfatal("usage: compact-macos-m8 --run [--read-only NAME FILE | --database NAME DIR] MACH-O -- ARGV0 [ARG ...]");
+        sysfatal("usage: compact-macos-m8 --run [--read-only NAME FILE | --database NAME DIR | --database-journal NAME DIR BARRIER] MACH-O -- ARGV0 [ARG ...]");
     image = read_file(image_path, &image_bytes, Mac8Limit, 0);
     if(input_path)
         input = read_file(input_path, &input_bytes, Mac8InputLimit, 1);
@@ -87,6 +99,11 @@ main(int argc, char **argv)
     setfsr(0);
     memset(&result, 0, sizeof result);
     if(database_dir){
+        if(barrier_path){
+            barrier = open(barrier_path, ORDWR);
+            if(barrier<0)
+                sysfatal("open database barrier: %r");
+        }
         if(!mac9_grant_name(database.name) || !mac_grant_init(database_dir))
             sysfatal("invalid database grant");
         database.fd = mac_grant_open_database(database.name);
@@ -94,6 +111,11 @@ main(int argc, char **argv)
             sysfatal("open granted database: %r");
         database.exclusive = 1;
         database.journal = nil;
+        if(barrier>=0){
+            if(!mac_grant_journal_init(database.name, barrier))
+                sysfatal("database journal grant: %r");
+            database.journal = &journal;
+        }
         database.size = mac_grant_size;
         database.read_at = mac_grant_read;
         database.write_at = mac_grant_write;
@@ -105,6 +127,8 @@ main(int argc, char **argv)
                           guest_argc, guest_argv, Mac8MaxBudget, alias, input, input_bytes, database_dir ? &database : nil, &result);
     if(database_dir)
         mac_grant_close(database.fd);
+    if(barrier>=0)
+        close(barrier);
     if(status!=2){
         fprint(2, "M8 fault pc=%llux token=%llux link=%llux args=%llux,%llux,%llux,%llux output=%ud,%ud\n",
                result.last_pc, result.pc, result.link, result.arg0, result.arg1,

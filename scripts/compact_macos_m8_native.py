@@ -29,6 +29,56 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def qualify_guest_commit(image, output, binaries, url, setup, program, runner_sha, resource):
+    mount = '/tmp/sqlite-storage'
+    barrier = mount+'/.ryzova-sync-v1'
+    server = '/amd64/bin/cw-hjfs'
+    commands = [setup, f'mkdir -p {mount}',
+                f'{server} -F -S -r -n sqlitefs -f /dev/sd01/data > /tmp/sqlitefs.log >[2=1]',
+                f'mount -nc /srv/sqlitefs {mount} && test -e {barrier} && echo SQLITE_STORAGE_READY',
+                f'sha1sum -2 256 {program}']
+    required = {3: 'SQLITE_STORAGE_READY'}
+    expected = {}
+    for arch, (binary, binary_sha) in binaries.items():
+        guest_binary = f'/tmp/m8-{arch}'
+        database = f'{arch}.db'
+        path = f'{mount}/{database}'
+        commands.extend([
+            f'hget {url}/{binary} >{guest_binary}; sha1sum -2 256 {guest_binary}',
+            f'hget {url}/{database} >{path}; sha1sum -2 256 {path}',
+            f'chmod +l {path}',
+        ])
+        expected[guest_binary] = binary_sha
+        expected[path] = sha256(output/database)
+        for name, sql, stdout in (
+                ('commit', 'BEGIN;INSERT INTO items VALUES(73);COMMIT;', b''),
+                ('reopen', 'SELECT id FROM items ORDER BY id;PRAGMA integrity_check;', b'42\n73\nok\n')):
+            filename = f'{arch}-guest-{name}.rc'
+            script = output/filename
+            script.write_text(f"{program} --run --database-journal {database} {mount} {barrier} "
+                              f"{guest_binary} -- sqlite3 -batch -noheader -init /dev/null {database} '{sql}'\n",
+                              encoding='ascii')
+            prefix = f'/tmp/{arch}-{name}'
+            marker = f'SQLITE_{arch}_{name}_OK'
+            commands.append(f'hget {url}/{filename} >/tmp/{filename}; sha1sum -2 256 /tmp/{filename}')
+            required[len(commands)] = marker
+            commands.append(f'if(rc /tmp/{filename} >{prefix}.out >[2]{prefix}.err) echo {marker}; if not cat {prefix}.err')
+            commands.append(f'sha1sum -2 256 {prefix}.out {prefix}.err')
+            expected['/tmp/'+filename] = sha256(script)
+            expected[prefix+'.out'] = hashlib.sha256(stdout).hexdigest()
+            expected[prefix+'.err'] = hashlib.sha256(b'').hexdigest()
+        marker = f'SQLITE_{arch}_JOURNAL_REMOVED'
+        required[len(commands)] = marker
+        commands.append(f'if(! test -e {path}-journal) echo {marker}')
+    log = session(image, commands, output, 'disk-commit', 180, required, resource=resource)
+    expected[program] = runner_sha
+    for path, digest in expected.items():
+        if digest_line(log, path) != digest:
+            raise ValueError(f'native SQLite commit evidence differs for {path}')
+    return dict(architectures=sorted(binaries), committed_row=73, process_reopen_verified=True)
+
+
+
 def verify(image, bootstrap, references, output, sqlite=False):
     base_sha = bootstrap_provenance(image, bootstrap)
     output.mkdir(parents=True, exist_ok=True)
@@ -79,9 +129,23 @@ def verify(image, bootstrap, references, output, sqlite=False):
         ['git', 'ls-files', '-z', 'sys/src/9', 'sys/include', 'amd64/include',
          'ryzova/compat/macos', 'ryzova/compat/windows'], text=True)
     archive = output/'source.tgz'
+    extra_sources = {}
+    resource = None
+    if sqlite:
+        resource = output/'sqlite-storage.qcow2'
+        subprocess.run(['qemu-img', 'create', '-f', 'qcow2', str(resource), '64M'], check=True)
+        upstream = subprocess.check_output(['git', 'ls-files', 'sys/src/cmd/hjfs'], text=True)
+        overlay = Path('ryzova/compat/windows/hjfs')
+        for name in upstream.splitlines():
+            candidate = overlay/Path(name).name
+            extra_sources['sys/src/cmd/compact-m8/windows/hjfs/'+Path(name).name] = (
+                candidate if candidate.is_file() else Path(name))
     with tarfile.open(archive, 'w:gz', format=tarfile.USTAR_FORMAT) as tar:
         for source in sources.rstrip('\0').split('\0'):
             target = source.replace('ryzova/compat/', 'sys/src/cmd/compact-m8/', 1)
+            if target not in extra_sources:
+                tar.add(source, arcname=target, recursive=False)
+        for target, source in extra_sources.items():
             tar.add(source, arcname=target, recursive=False)
     source_sha = sha256(archive)
 
@@ -97,7 +161,9 @@ def verify(image, bootstrap, references, output, sqlite=False):
                 f'hget {url}/source.tgz > /tmp/m8-source.tgz; sha1sum -2 256 /tmp/m8-source.tgz',
                 'cd /; tar xzf /tmp/m8-source.tgz',
                 'cd /sys/src/cmd/compact-m8/macos; '
-                'rc m8_build.rc >/tmp/m8-build.log >[2=1] && echo M8_NATIVE_OK; cat /tmp/m8-build.log',
+                'rc m8_build.rc >/tmp/m8-build.log >[2=1] && '
+                + ('@{cd ../windows/hjfs; mk install >> /tmp/m8-build.log >[2=1]} && ' if sqlite else '')
+                + 'echo M8_NATIVE_OK; cat /tmp/m8-build.log',
                 'cd /sys/src/9/pc64; mk >/tmp/m8-kernel.log >[2=1] && echo M8_KERNEL_OK; tail -n 25 /tmp/m8-kernel.log',
                 '9fs 9fat; cd /sys/src/9/pc64; cp 9pc64 /n/9fat/9pc64 && cmp 9pc64 /n/9fat/9pc64 '
                 '&& echo M8_COPY_OK; sha1sum -2 256 9pc64',
@@ -207,6 +273,7 @@ def verify(image, bootstrap, references, output, sqlite=False):
                     }
                     if any(digest_line(reboot, name) != digest for name, digest in hashes.items()):
                         raise ValueError(f'{arch}: rebooted database read differs')
+                guest_commit = qualify_guest_commit(image, output, binaries, url, setup, program, runner_sha, resource)
             else:
                 with route_fixture(commit) as route:
                     commands.extend(mount_commands(route))
@@ -291,6 +358,7 @@ def verify(image, bootstrap, references, output, sqlite=False):
     if sqlite:
         receipt['sqlite_profile_qualified'] = True
         receipt['imported_database_reopened_after_reboot'] = True
+        receipt['native_database_commit'] = guest_commit
     else:
         input_digest = hashlib.sha256(INPUT).hexdigest()
         if any(digest_line(run, name) != input_digest for name in ('/tmp/m8-input-original', GUEST_INPUT)):
