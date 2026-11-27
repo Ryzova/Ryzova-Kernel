@@ -2,6 +2,7 @@
 #include <u.h>
 #include <libc.h>
 #include "m8_start.h"
+#include "grant.h"
 
 static unsigned char *
 read_file(char *path, unsigned int *size, unsigned int limit, int empty_ok)
@@ -37,6 +38,8 @@ main(int argc, char **argv)
     const char *const *guest_argv = nil;
     uvlong guard;
     Mac8Stop result;
+    Mac9Database database;
+    char *database_dir = nil;
 
     if(argc==3 && !strcmp(argv[1], "--version")){
         version = 1;
@@ -56,13 +59,18 @@ main(int argc, char **argv)
                 sysfatal("invalid read-only guest basename");
             at += 3;
         }
+        else if(argc>=8 && !strcmp(argv[at], "--database")){
+            database.name = argv[at+1];
+            database_dir = argv[at+2];
+            at += 3;
+        }
         if(argc-at<3 || strcmp(argv[at+1], "--") || !argv[at+2][0])
             sysfatal("expected MACH-O -- ARGV0 [ARG ...]");
         image_path = argv[at];
         guest_argc = argc-at-2;
         guest_argv = (const char *const *)(argv+at+2);
     }else
-        sysfatal("usage: compact-macos-m8 --run [--read-only NAME FILE] MACH-O -- ARGV0 [ARG ...]");
+        sysfatal("usage: compact-macos-m8 --run [--read-only NAME FILE | --database NAME DIR] MACH-O -- ARGV0 [ARG ...]");
     image = read_file(image_path, &image_bytes, Mac8Limit, 0);
     if(input_path)
         input = read_file(input_path, &input_bytes, Mac8InputLimit, 1);
@@ -78,11 +86,22 @@ main(int argc, char **argv)
     setfcr(FPRNR);
     setfsr(0);
     memset(&result, 0, sizeof result);
+    if(database_dir){
+        if(!mac9_grant_name(database.name) || !mac_grant_init(database_dir))
+            sysfatal("invalid database grant");
+        database.fd = mac_grant_open(database.name);
+        if(database.fd<0)
+            sysfatal("open granted database: %r");
+        database.read_at = mac_grant_read;
+        database.write_at = mac_grant_write;
+    }
     if(version)
         status = mac8_start(image, image_bytes, arena, Mac8ArenaBytes, guard, &result);
     else
-        status = mac9_run(image, image_bytes, arena, Mac8ArenaBytes, guard,
-                          guest_argc, guest_argv, Mac8MaxBudget, alias, input, input_bytes, &result);
+        status = mac9_run_database(image, image_bytes, arena, Mac8ArenaBytes, guard,
+                          guest_argc, guest_argv, Mac8MaxBudget, alias, input, input_bytes, database_dir ? &database : nil, &result);
+    if(database_dir)
+        mac_grant_close(database.fd);
     if(status!=2){
         fprint(2, "M8 fault pc=%llux token=%llux link=%llux args=%llux,%llux,%llux,%llux output=%ud,%ud\n",
                result.last_pc, result.pc, result.link, result.arg0, result.arg1,
