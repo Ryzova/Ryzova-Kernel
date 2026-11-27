@@ -11,7 +11,18 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-sources
+          path: |
+            scripts/ryz_build.py
+            examples/terminal5b/
   build-and-run:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -21,12 +32,9 @@ jobs:
           - {os: macos-latest, target: macos}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /scripts/ryz_build.py
-            /examples/terminal5b/
+          name: terminal-sources
       - name: Compile and verify checksum and error exits
         shell: python
         run: |
