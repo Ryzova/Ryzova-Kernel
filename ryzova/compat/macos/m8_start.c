@@ -276,6 +276,8 @@ struct GuestMutex {
 };
 typedef struct Thread Thread;
 struct Thread {
+    Mac9Database *database;
+    int database_open, database_writable;
     Word sigint;
     GuestMutex mutexes[MutexLimit];
     Word values[KeyLimit];
@@ -682,10 +684,38 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
         left = guest_read(plan, arena, stack, a0, count+1, 1);
         if(!left)
             return -1;
-        /* The snapshot-only namespace does not publish a POSIX fd bridge. */
+        if(thread->database && !strcmp((const char *)left+(*left=='/'), thread->database->name)){
+            /* Existing file only. Darwin O_CREAT is harmless on this pinned fd. */
+            if(!(a1 & ~(Word)(0x1000000|0x200|0x100|2)) && !thread->database_open){
+                thread->database_open = 1;
+                thread->database_writable = (a1&2)!=0;
+                *result = 3;
+                return 1;
+            }
+        }
         write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4,
                  !strcmp((const char *)left, "/dev/urandom") ? 2 : 13);
         *result = (unsigned int)-1;
+    }else if(!strcmp(name, "_close") && a0==3 && thread->database_open){
+        thread->database_open = 0;
+    }else if((!strcmp(name, "_pread") || !strcmp(name, "_pwrite")) && a0==3 && thread->database_open){
+        long transferred = -1;
+        if(a3<=65536 && a2<=65536-a3){
+            if(!strcmp(name, "_pread")){
+                dest = guest_write(plan, arena, stack, a1, (unsigned int)a2, 1);
+                if(!dest)
+                    return -1;
+                transferred = thread->database->read_at(thread->database->fd, dest, a2, a3);
+            }else if(thread->database_writable){
+                left = guest_read(plan, arena, stack, a1, (unsigned int)a2, 1);
+                if(!left)
+                    return -1;
+                transferred = thread->database->write_at(thread->database->fd, left, a2, a3);
+            }
+        }
+        if(transferred<0)
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 5);
+        *result = (Word)transferred;
     }else if(!strcmp(name, "_time")){
         *result = 946684800; /* The isolated virtual clock starts at 2000-01-01 UTC. */
         if(a0){
@@ -2154,10 +2184,10 @@ mac9_grant_name(const char *name)
 }
 
 int
-mac9_run(const unsigned char *image, unsigned int length, unsigned char *arena,
+mac9_run_database(const unsigned char *image, unsigned int length, unsigned char *arena,
          unsigned int capacity, Word guard, unsigned int argc, const char *const *argv,
          unsigned int budget, const char *input_name, const unsigned char *input,
-         unsigned int input_bytes, Mac8Stop *out)
+         unsigned int input_bytes, Mac9Database *database, Mac8Stop *out)
 {
     Mac8Image plan;
     unsigned char *stack;
@@ -2165,6 +2195,8 @@ mac9_run(const unsigned char *image, unsigned int length, unsigned char *arena,
     Mac8Heap *heap;
     Thread thread = {0};
     int status = 0;
+    if(database && (!mac9_grant_name(database->name) || database->fd<0 || !database->read_at || !database->write_at))
+        return 0;
     if(!out || !arena || capacity<StackBytes || !argc || argc>(Envp-Argv)/8-1 ||
        !argv || !budget || budget>Mac8MaxBudget || input_bytes>Mac8InputLimit ||
        (input ? !mac9_grant_name(input_name) : input_name || input_bytes))
@@ -2202,6 +2234,7 @@ mac9_run(const unsigned char *image, unsigned int length, unsigned char *arena,
     if(!heap)
         return 0;
     heap->count = 0;
+    thread.database = database;
     thread.input = input;
     thread.input_name = input_name;
     thread.input_bytes = input_bytes;
@@ -2213,6 +2246,16 @@ mac9_run(const unsigned char *image, unsigned int length, unsigned char *arena,
     return status;
 }
 
+
+int
+mac9_run(const unsigned char *image, unsigned int length, unsigned char *arena,
+         unsigned int capacity, Word guard, unsigned int argc, const char *const *argv,
+         unsigned int budget, const char *input_name, const unsigned char *input,
+         unsigned int input_bytes, Mac8Stop *out)
+{
+    return mac9_run_database(image, length, arena, capacity, guard, argc, argv, budget,
+                             input_name, input, input_bytes, 0, out);
+}
 
 int
 mac8_run(const unsigned char *image, unsigned int length, unsigned char *arena,

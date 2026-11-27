@@ -32,6 +32,16 @@ int mac8_run(const unsigned char *, unsigned int, unsigned char *, unsigned int,
 /* M9 accepts one immutable input under a caller-selected guest basename.
  * The name, bytes and argv remain valid for the duration of the run. */
 int mac9_grant_name(const char *);
+typedef struct Mac9Database Mac9Database;
+struct Mac9Database {
+    const char *name;
+    int fd;
+    long (*read_at)(int, void *, unsigned int, unsigned long);
+    long (*write_at)(int, const void *, unsigned int, unsigned long);
+};
+int mac9_run_database(const unsigned char *, unsigned int, unsigned char *, unsigned int,
+             unsigned long long, unsigned int, const char *const *, unsigned int,
+             const char *, const unsigned char *, unsigned int, Mac9Database *, Mac8Stop *);
 int mac9_run(const unsigned char *, unsigned int, unsigned char *, unsigned int,
              unsigned long long, unsigned int, const char *const *, unsigned int,
              const char *, const unsigned char *, unsigned int, Mac8Stop *);
