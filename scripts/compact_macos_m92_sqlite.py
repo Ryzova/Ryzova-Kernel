@@ -308,15 +308,25 @@ def check_database_open(lib, arch, image, arena, database_bytes):
         file.flush()
         fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         database = Database(b'phase4.db', file.fileno(), 1, size_callback(lambda fd: os.fstat(fd).st_size), read_at, write_at)
-        status = lib.mac9_run_database(image, len(image), arena, len(arena), GUARD, len(argv),
-                                       (C.c_char_p*len(argv))(*argv), 16777216, None, None, 0,
-                                       C.byref(database), C.byref(stop))
+        def execute(args):
+            return lib.mac9_run_database(image, len(image), arena, len(arena), GUARD, len(args),
+                                        (C.c_char_p*len(args))(*args), 16777216, None, None, 0,
+                                        C.byref(database), C.byref(stop))
+
+        status = execute(argv[:-1]+[b'BEGIN;INSERT INTO items VALUES(73);COMMIT;'])
+        file.seek(0)
+        error = bytes(stop.stderr_data[:stop.stderr_bytes])
+        if ((status, stop.exit_code, stop.stdout_bytes, error) !=
+                (2, 1, 0, b'Error in attempt to write a readonly database\n') or file.read()!=database_bytes):
+            raise ValueError(f'{arch}: database-only grant did not reject the transaction cleanly')
+        status = execute(argv)
         file.seek(0)
         actual = bytes(stop.stdout_data[:stop.stdout_bytes])
         if (status, stop.exit_code, actual, stop.stderr_bytes, file.read()) != (
                 2, 0, b'42\nok\n', 0, database_bytes):
             raise ValueError(f'{arch}: file-backed SQLite read or integrity check failed')
-    return dict(stdout_hex=actual.hex(), steps=stop.steps, database_sha256=sha256(database_bytes))
+    return dict(stdout_hex=actual.hex(), steps=stop.steps, database_sha256=sha256(database_bytes),
+                transaction_without_journal_grant_rejected=True)
 
 
 def check_execution(lib, arch, image, cases, database_bytes):

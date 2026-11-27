@@ -288,6 +288,12 @@ struct Thread {
     unsigned int allocated, closed, cleanup_count, input_open, input_eof, input_error, zone, null_open, null_eof;
 };
 
+static int
+database_path(Thread *thread, const unsigned char *path)
+{
+    return thread->database && !strcmp((const char *)path+(*path=='/'), thread->database->name);
+}
+
 static GuestMutex *
 guest_mutex(Thread *thread, Word address, int create)
 {
@@ -487,7 +493,9 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
         left = guest_read(plan, arena, stack, a0, count+1, 1);
         if(!left)
             return -1;
-        if(strcmp((const char *)left, "/dev/null") &&
+        if(database_path(thread, left))
+            i = (a1&~7ULL) ? 22 : (a1&1) ? 13 : 0;
+        else if(strcmp((const char *)left, "/dev/null") &&
            (!thread->input || strcmp((const char *)left, thread->input_name)))
             i = 2;
         else if(a1&~7ULL)
@@ -522,6 +530,24 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
         left = guest_read(plan, arena, stack, a0, count+1, 1);
         if(!left)
             return -1;
+        if(database_path(thread, left)){
+            long size = thread->database->size(thread->database->fd);
+            if(size<0){
+                write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 5);
+                *result = (unsigned int)-1;
+                return 1;
+            }
+            dest = guest_write(plan, arena, stack, a1, 144, 1);
+            if(!dest)
+                return -1;
+            memset(dest, 0, 144);
+            write_le(dest+4, 2, 0100600);
+            write_le(dest+6, 2, 1);
+            write_le(dest+8, 8, 3);
+            write_le(dest+96, 8, size);
+            write_le(dest+112, 4, 4096);
+            return 1;
+        }
         if(strcmp((const char *)left, "/dev/null") &&
            (!thread->input || strcmp((const char *)left, thread->input_name))){
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 2);
@@ -1262,6 +1288,14 @@ intel_start(const Mac8Image *plan, const unsigned char *image, unsigned char *ar
             continue;
         }
         out->last_pc = machine.ip;
+        /* RDTSC exposes the monotonically increasing virtual instruction count. */
+        if(mac8_access(plan, machine.ip, 2, Mac8Execute) &&
+           read_le(arena+(machine.ip-MAC8_BASE), 2)==0x310f){
+            machine.r[0] = out->steps;
+            machine.r[2] = 0;
+            machine.ip += 2;
+            continue;
+        }
         if(cw_cpu_step(&machine) != CW_OK)
             return 0;
     }
@@ -1464,7 +1498,10 @@ arm_start(const Mac8Image *plan, const unsigned char *image, unsigned char *aren
         rn = (op>>5)&31;
         v = rn==31 ? sp : r[rn];
         imm = (op>>10)&0xfff;
-        if(op==0xd5033bbfU){ /* DMB ISH, ordered single-thread guest memory. */
+        if((op&~31U)==0xd53be040U){ /* MRS Xt, CNTVCT_EL0 */
+            if(rd!=31)
+                r[rd] = out->steps;
+        }else if(op==0xd5033bbfU){ /* DMB ISH, ordered single-thread guest memory. */
         }else if((op&0x1f800000U)==0x11000000U){ /* ADD/SUB (immediate) */
             if(op&(1U<<22))
                 imm <<= 12;
