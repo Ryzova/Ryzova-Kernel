@@ -5,6 +5,9 @@ on:
       - scripts/ryz_build.py
       - examples/terminal5b/**
       - .github/workflows/terminal-5b.yml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -19,6 +22,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/ryz_build.py
+            /examples/terminal5b/
       - name: Compile and verify checksum and error exits
         shell: python
         run: |
