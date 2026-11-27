@@ -14,6 +14,8 @@ def main():
     parser.add_argument("target", choices=TRIPLES)
     parser.add_argument("source", type=Path)
     parser.add_argument("--out-dir", type=Path, default=Path("build"))
+    parser.add_argument("--win32-source", action="store_true",
+                        help="enable the Phase 5C Win32 directory API subset")
     args = parser.parse_args()
     source = args.source.resolve()
     if not source.is_file() or source.suffix != ".c":
@@ -31,6 +33,9 @@ def main():
         if not zig:
             parser.error("cross compilation requires zig on PATH")
         command = [zig, "cc", "-target", TRIPLES[args.target]]
+    if args.win32_source and args.target != "windows":
+        include = Path(__file__).resolve().parents[1] / "ryzova/compat/win32-source"
+        command.extend(["-I", str(include)])
     directory = args.out_dir / args.target
     directory.mkdir(parents=True, exist_ok=True)
     binary = directory / (source.stem + (".exe" if args.target == "windows" else ""))
