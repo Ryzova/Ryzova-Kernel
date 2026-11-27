@@ -21,6 +21,13 @@ ARGS = ["-b", *QUERY_ARGS]
 
 
 
+# Keep the query fixed while exercising different input data and a parser error.
+EXTRA_INPUTS = {
+    "changed": b'{"items":[7,9]}\n',
+    "invalid": b']\n',
+}
+
+
 def source_head():
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
@@ -56,7 +63,23 @@ def reference(out):
             raise ValueError("jq Windows reference changed the input")
     if (run.returncode, run.stdout, run.stderr) != (0, STDOUT, b""):
         raise ValueError(f"jq Windows reference differs: {run!r}")
+    input_cases = {}
+    for name, data in EXTRA_INPUTS.items():
+        filename = name + ".json"
+        argv = [*ARGS[:-1], filename]
+        with tempfile.TemporaryDirectory() as work:
+            (Path(work) / filename).write_bytes(data)
+            case = subprocess.run([str(binary.resolve()), *argv], cwd=work,
+                                  capture_output=True, timeout=15)
+        if name == "changed" and (case.returncode, case.stdout, case.stderr) != (
+                0, b'{"count":2,"sum":16}\n', b""):
+            raise ValueError("unexpected Windows result for changed input")
+        if name == "invalid" and (case.returncode != 5 or case.stdout or not case.stderr):
+            raise ValueError("unexpected Windows parse error")
+        input_cases[name] = dict(argv=argv, input_sha256=sha(data), exit_code=case.returncode,
+                                 stdout_hex=case.stdout.hex(), stderr_hex=case.stderr.hex())
     write_json(out / "reference.json", {
+        "input_cases": input_cases,
         "schema": "compact-windows-w7-jq-reference/v1",
         "source_commit": source_head(), "url": URL, "sha256": SHA,
         "platform": platform.platform(), "arch": platform.machine().upper(),
