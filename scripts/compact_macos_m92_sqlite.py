@@ -305,10 +305,12 @@ def check_database_open(lib, arch, image, arena):
                                        (C.c_char_p*len(argv))(*argv), 16777216, None, None, 0,
                                        C.byref(database), C.byref(stop))
         symbol = image[stop.name:].split(b'\0', 1)[0]
-        expected = b'_fstatfs$INODE64' if arch == 'x86_64' else b'_fstatfs'
-        if status != 1 or symbol != expected or os.fstat(file.fileno()).st_size:
+        expected = b'_fcntl'
+        if (status != 1 or symbol != expected or (stop.arg0, stop.arg1) != (3, 7) or
+                os.fstat(file.fileno()).st_size):
             raise ValueError(f'{arch}: unexpected granted SQLite open result {status}, {symbol!r}')
-    return dict(first_pending_import=symbol.decode(), steps=stop.steps)
+    return dict(first_pending_import=symbol.decode(), descriptor=stop.arg0,
+                fcntl_command=stop.arg1, steps=stop.steps)
 
 
 def check_execution(lib, arch, image, cases):
