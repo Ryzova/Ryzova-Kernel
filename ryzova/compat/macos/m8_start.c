@@ -496,7 +496,8 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, i);
             *result = (unsigned int)-1;
         }
-    }else if(!strcmp(name, "_stat") || !strcmp(name, "_stat$INODE64")){
+    }else if(!strcmp(name, "_stat") || !strcmp(name, "_stat$INODE64") ||
+             !strcmp(name, "_lstat") || !strcmp(name, "_lstat$INODE64")){
         count = string_length(plan, arena, stack, a0, PathBytes);
         if(count<0)
             return -1;
@@ -520,6 +521,26 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             write_le(dest+96, 8, i ? 0 : thread->input_bytes);
             write_le(dest+112, 4, 4096);
         }
+    }else if(!strcmp(name, "_getcwd")){
+        /* The launcher starts in the virtual root and has no chdir service. */
+        if((a0 || a1) && a1<2){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, a1 ? 34 : 22);
+            return 1;
+        }
+        if(!a0){
+            if(a1>Mac8HeapBytes || (offset=mac8_alloc(heap, a1 ? (unsigned int)a1 : 2))==Mac8HeapBytes){
+                write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 12);
+                return 1;
+            }
+            a0 = HEAP_BASE+offset;
+            out->alloc_calls++;
+        }
+        dest = guest_write(plan, arena, stack, a0, 2, 1);
+        if(!dest)
+            return -1;
+        dest[0] = '/';
+        dest[1] = 0;
+        *result = a0;
     }else if(!strcmp(name, "_pathconf")){
         count = string_length(plan, arena, stack, a0, PathBytes);
         if(count<0)

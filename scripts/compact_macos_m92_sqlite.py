@@ -301,6 +301,11 @@ def check_execution(lib, arch, image, cases):
     executions = {name: run(name, reference['argv'], reference) for name, reference in cases.items()}
     run('alternate SQL', CASES['query'][:-1]+['SELECT 7*8;'],
         dict(stdout_hex=b'56\n'.hex(), stderr_hex='', exit_code=0))
+    database = 'phase4.db'
+    error = f'Error: unable to open database "{database}": unable to open database file\n'
+    executions['disk_without_grant'] = run(
+        'disk without grant', [*CASES['query'][:-2], database, 'CREATE TABLE items(id PRIMARY KEY);'],
+        dict(stdout_hex='', stderr_hex=error.encode().hex(), exit_code=1))
     return executions
 
 
