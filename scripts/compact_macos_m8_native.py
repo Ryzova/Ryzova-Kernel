@@ -123,15 +123,20 @@ def verify(image, bootstrap, references, output, sqlite=False):
                 for case in cases_by_arch[arch]:
                     prefix = f'{path}-{case}'
                     marker = f'M8_{arch}_{case}_OK'
-                    markers[len(commands)] = marker
                     if sqlite:
                         argv = cases_by_arch[arch][case]['argv']
                         guest = " ".join("'" + word.replace("'", "''") + "'" for word in argv)
-                        launch = f'$launch --run {path} -- sqlite3 {guest}'
+                        script_name = f'{arch}-{case}.rc'
+                        script = output/script_name
+                        script.write_text(f'{program} --run {path} -- sqlite3 {guest}\n', encoding='utf-8')
+                        commands.append(f'hget {url}/{script_name} >/tmp/{script_name}')
+                        commands.append(f'sha1sum -2 256 /tmp/{script_name}')
+                        launch = f'rc /tmp/{script_name}'
                     else:
                         args = (f'--run {path} -- jq --version' if case == 'version' else
                                 f'--run $g {path} -- jq -c $q {INPUT_NAME}')
                         launch = f'$m {args}'
+                    markers[len(commands)] = marker
                     commands.append(
                         f'if({launch} >{prefix}.out >[2]{prefix}.err) echo {marker}; '
                         f'if not cat {prefix}.err')
@@ -225,6 +230,12 @@ def verify(image, bootstrap, references, output, sqlite=False):
             report[arch]['mutation'] = dict(operations=MUTATION_OPERATIONS, fixture_sha256=mutation_sha,
                                             exit_code=0, stdout_hex='', stderr_hex='')
 
+    if sqlite:
+        for arch, cases in cases_by_arch.items():
+            for case in cases:
+                script_name = f'{arch}-{case}.rc'
+                if digest_line(run, '/tmp/'+script_name) != sha256(output/script_name):
+                    raise ValueError(f'guest SQLite script differs: {script_name}')
     schema = 'compact-macos-m93-native-sqlite/v1' if sqlite else 'compact-macos-m8-native-jq/v1'
     receipt = dict(schema=schema, source_commit=commit,
                    source_archive_sha256=source_sha, bootstrap_sha256=base_sha, kernel_sha256=kernel_sha,
