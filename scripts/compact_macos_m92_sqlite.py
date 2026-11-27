@@ -300,7 +300,7 @@ def check_database_open(lib, arch, image, arena, database_bytes):
 
     lib.mac9_run_database.argtypes = lib.mac9_run.argtypes[:-1]+[C.POINTER(Database), C.POINTER(Stop)]
     argv = [b'sqlite3', b'-batch', b'-noheader', b'-init', b'/dev/null',
-            b'phase4.db', b'SELECT id FROM items;PRAGMA integrity_check;']
+            b'phase4.db', b'SELECT id FROM items ORDER BY id;PRAGMA integrity_check;']
     stop = Stop()
     with tempfile.TemporaryFile() as file:
         import fcntl
