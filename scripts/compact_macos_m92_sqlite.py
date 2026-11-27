@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import struct
 import subprocess
+import tempfile
 from urllib.request import urlopen
 import zipfile
 
@@ -115,6 +116,29 @@ def check_cases(cases):
             raise ValueError(f'unexpected SQLite query result: {data!r}')
 
 
+def file_reference(binary):
+    """Verify committed and rolled-back rows using three distinct processes."""
+    steps = (
+        ("commit", "CREATE TABLE items(id PRIMARY KEY);BEGIN;INSERT INTO items VALUES(42);COMMIT;", b""),
+        ("rollback", "BEGIN;INSERT INTO items VALUES(99);ROLLBACK;", b""),
+        ("reopen", "SELECT id FROM items ORDER BY id;PRAGMA integrity_check;", b"42\nok\n"),
+    )
+    receipts = {}
+    with tempfile.TemporaryDirectory() as work:
+        for name, sql, expected in steps:
+            argv = ['-batch', '-noheader', '-init', '/dev/null', 'phase4.db', sql]
+            result = subprocess.run([binary, *argv], cwd=work, capture_output=True,
+                                    stdin=subprocess.DEVNULL, timeout=15, env={'LC_ALL': 'C'})
+            if (result.returncode, result.stdout, result.stderr) != (0, expected, b''):
+                raise ValueError(f'SQLite disk reference {name} differs: {result!r}')
+            receipts[name] = dict(argv=argv, exit_code=result.returncode,
+                                  stdout_hex=result.stdout.hex(), stderr_hex=result.stderr.hex())
+        database = (Path(work)/'phase4.db').read_bytes()
+        if not database.startswith(b'SQLite format 3\x00'):
+            raise ValueError('SQLite disk reference header differs')
+    return dict(database_sha256=sha256(database), database_bytes=len(database), cases=receipts)
+
+
 def reference(arch, out):
     if platform.system() != 'Darwin' or platform.machine() != arch:
         raise ValueError('SQLite reference runner architecture mismatch')
@@ -151,6 +175,7 @@ def reference(arch, out):
     save_json(out/'reference.json', dict(schema='compact-macos-m92-sqlite-reference/v1',
               source_commit=source_head(), architecture=arch, archive_sha3_256=expected,
               image_sha256=sha256(image), image_bytes=len(image), cases=results,
+              file_reference=file_reference(binary),
               layout=layout, inventory_sha256=tool_hashes))
     print(f'{arch}: pinned {len(image)} SQLite bytes, {len(layout["segments"])} segments, '
           f'dependencies {layout["dylibs"]}')
