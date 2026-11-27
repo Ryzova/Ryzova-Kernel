@@ -2,6 +2,9 @@
 #ifdef MAC_PLAN9
 #include <u.h>
 #include <libc.h>
+#ifdef MAC_SQLITE_JOURNAL
+#include "../windows/sync_protocol.h"
+#endif
 #else
 #define _GNU_SOURCE
 #include <fcntl.h>
@@ -21,14 +24,30 @@ static Dir *root_identity;
 static int rootfd = -1;
 #endif
 
+#ifdef MAC_PLAN9
+static int
+pin_root(char *path, int flags)
+{
+    if(rfork(RFNAMEG)<0 || bind(path, "/mnt", flags)<0)
+        return 0;
+    root_identity = dirstat("/mnt");
+    return root_identity!=nil && (root_identity->mode&DMDIR)!=0;
+}
+
+#ifdef MAC_SQLITE_JOURNAL
+int
+mac_grant_init_journal_root(char *path)
+{
+    return pin_root(path, MREPL|MCREATE);
+}
+#endif
+#endif
+
 int
 mac_grant_init(char *path)
 {
 #ifdef MAC_PLAN9
-    if(rfork(RFNAMEG)<0 || bind(path, "/mnt", MREPL)<0)
-        return 0;
-    root_identity = dirstat("/mnt");
-    return root_identity!=nil && (root_identity->mode&DMDIR)!=0;
+    return pin_root(path, MREPL);
 #else
     rootfd = open(path, O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     return rootfd>=0;
@@ -128,7 +147,7 @@ mac_grant_size(int fd)
 {
 #ifdef MAC_PLAN9
     Dir *file = dirfstat(fd);
-    long size = ordinary(file, 1) ? (long)file->length : -1;
+    long size = ordinary(file, 1) || ordinary(file, 0) ? (long)file->length : -1;
     free(file);
     return size;
 #else
@@ -160,3 +179,105 @@ mac_grant_close(int fd)
 {
     close(fd);
 }
+
+#ifdef MAC_SQLITE_JOURNAL
+static int barrier = -1, journal_failed;
+static CwSyncNonce nonce;
+static char journal_path[sizeof "/mnt/" + MaxName];
+
+int
+mac_grant_journal_init(const char *name, int fd)
+{
+    Dir *cap, *existing;
+    char banner[32], error[ERRMAX];
+    int valid;
+
+    if(!valid_name(name) || strlen(name)+sizeof "-journal"-1>MaxName)
+        return 0;
+    cap = dirfstat(fd);
+    valid = cap!=nil && cap->type==root_identity->type && cap->dev==root_identity->dev &&
+            cap->qid.type==0 && cap->qid.path==~(CwSyncNonce)1 && cap->qid.vers==1;
+    free(cap);
+    if(!valid || pread(fd, banner, sizeof banner, 0)!=13 ||
+       memcmp(banner, "CWFS_SYNC_V1\n", 13))
+        return 0;
+    snprint(journal_path, sizeof journal_path, "/mnt/%s-journal", name);
+    existing = dirstat(journal_path);
+    if(existing){
+        free(existing);
+        werrstr("existing rollback journal requires recovery");
+        return 0;
+    }
+    rerrstr(error, sizeof error);
+    if(!strstr(error, "not exist") && !strstr(error, "not found"))
+        return 0;
+    barrier = fd;
+    nonce = nsec();
+    return 1;
+}
+
+int
+mac_grant_journal_open(int database, int create_new)
+{
+    Dir *file;
+    int fd;
+
+    USED(database);
+    if(barrier<0 || journal_failed || !create_new)
+        return -1;
+    fd = create(journal_path, ORDWR|OEXCL, 0600);
+    if(fd<0){
+        fprint(2, "create rollback journal %s: %r\n", journal_path);
+        return -1;
+    }
+    file = dirfstat(fd);
+    if(!ordinary(file, 0)){
+        if(file)
+            fprint(2, "journal metadata type=%ud dev=%ud qid=%ux mode=%lux size=%lld (root %ud/%ud)\n",
+                   file->type, file->dev, file->qid.type, file->mode, file->length, root_identity->type, root_identity->dev);
+        else
+            fprint(2, "stat rollback journal: %r\n");
+        close(fd);
+        fd = -1;
+    }
+    free(file);
+    return fd;
+}
+
+int
+mac_grant_journal_close(int fd)
+{
+    if(close(fd)<0){
+        journal_failed = 1;
+        return -1;
+    }
+    return 0;
+}
+
+int
+mac_grant_journal_sync(int fd)
+{
+    char request[22], reply[32];
+    int count;
+
+    USED(fd);
+    if(barrier<0 || journal_failed || nonce==~(CwSyncNonce)0)
+        return -1;
+    cw_sync_request(++nonce, request);
+    if(pwrite(barrier, request, sizeof request, 0)==sizeof request){
+        count = pread(barrier, reply, sizeof reply, 0);
+        if(count>=0 && cw_sync_ack(reply, count, nonce))
+            return 0;
+    }
+    journal_failed = 1;
+    return -1;
+}
+
+int
+mac_grant_journal_remove(int database)
+{
+    if(journal_failed || remove(journal_path)<0)
+        return -1;
+    return mac_grant_journal_sync(database);
+}
+#endif
