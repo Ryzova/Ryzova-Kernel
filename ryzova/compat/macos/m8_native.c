@@ -89,9 +89,11 @@ main(int argc, char **argv)
     if(database_dir){
         if(!mac9_grant_name(database.name) || !mac_grant_init(database_dir))
             sysfatal("invalid database grant");
-        database.fd = mac_grant_open(database.name);
+        database.fd = mac_grant_open_database(database.name);
         if(database.fd<0)
             sysfatal("open granted database: %r");
+        database.exclusive = 1;
+        database.size = mac_grant_size;
         database.read_at = mac_grant_read;
         database.write_at = mac_grant_write;
     }

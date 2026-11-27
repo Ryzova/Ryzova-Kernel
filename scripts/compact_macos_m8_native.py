@@ -50,7 +50,11 @@ def verify(image, bootstrap, references, output, sqlite=False):
             check_cases(receipt['cases'])
             name = f'sqlite3-{arch}'
             (output/name).write_bytes(binary)
-            cases_by_arch[arch] = receipt['cases']
+            db = (ref/'phase4.db').read_bytes()
+            if hashlib.sha256(db).hexdigest() != receipt['file_reference']['database_sha256']:
+                raise ValueError(f'{arch}: reference database digest differs')
+            (output/f'{arch}.db').write_bytes(db)
+            cases_by_arch[arch] = dict(receipt['cases'], disk_read=receipt['file_reference']['cases']['reopen'])
             binaries[arch] = name, digest
     else:
         (output/INPUT_NAME).write_bytes(INPUT)
@@ -128,7 +132,15 @@ def verify(image, bootstrap, references, output, sqlite=False):
                         guest = " ".join("'" + word.replace("'", "''") + "'" for word in argv)
                         script_name = f'{arch}-{case}.rc'
                         script = output/script_name
-                        script.write_text(f'{program} --run {path} -- sqlite3 {guest}\n', encoding='utf-8')
+                        grant = ''
+                        if case == 'disk_read':
+                            directory = f'/usr/glenda/sqlite-{arch}'
+                            commands.extend([f'mkdir {directory}',
+                                             f'hget {url}/{arch}.db >{directory}/phase4.db',
+                                             f'chmod +l {directory}/phase4.db',
+                                             f'sha1sum -2 256 {directory}/phase4.db'])
+                            grant = f'--database phase4.db {directory} '
+                        script.write_text(f'{program} --run {grant}{path} -- sqlite3 {guest}\n', encoding='utf-8')
                         commands.append(f'hget {url}/{script_name} >/tmp/{script_name}')
                         commands.append(f'sha1sum -2 256 /tmp/{script_name}')
                         launch = f'rc /tmp/{script_name}'
@@ -232,6 +244,8 @@ def verify(image, bootstrap, references, output, sqlite=False):
 
     if sqlite:
         for arch, cases in cases_by_arch.items():
+            if digest_line(run, f'/usr/glenda/sqlite-{arch}/phase4.db') != sha256(output/f'{arch}.db'):
+                raise ValueError(f'{arch}: native database digest differs')
             for case in cases:
                 script_name = f'{arch}-{case}.rc'
                 if digest_line(run, '/tmp/'+script_name) != sha256(output/script_name):

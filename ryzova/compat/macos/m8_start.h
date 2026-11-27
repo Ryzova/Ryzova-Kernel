@@ -35,7 +35,8 @@ int mac9_grant_name(const char *);
 typedef struct Mac9Database Mac9Database;
 struct Mac9Database {
     const char *name;
-    int fd;
+    int fd, exclusive;
+    long (*size)(int);
     long (*read_at)(int, void *, unsigned int, unsigned long);
     long (*write_at)(int, const void *, unsigned int, unsigned long);
 };

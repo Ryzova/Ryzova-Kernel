@@ -137,6 +137,7 @@ def file_reference(binary):
         database = (Path(work)/'phase4.db').read_bytes()
         if not database.startswith(b'SQLite format 3\x00'):
             raise ValueError('SQLite disk reference header differs')
+    (binary.parent/'phase4.db').write_bytes(database)
     return dict(database_sha256=sha256(database), database_bytes=len(database), cases=receipts)
 
 
@@ -278,12 +279,14 @@ def check_map(lib, arch, image, layout):
                 rebases=plan.rebases, libz_imports=12, rejected=sorted(invalid))
 
 
-def check_database_open(lib, arch, image, arena):
+def check_database_open(lib, arch, image, arena, database_bytes):
     io_callback = C.CFUNCTYPE(C.c_long, C.c_int, C.c_void_p, C.c_uint, C.c_ulong)
 
+    size_callback = C.CFUNCTYPE(C.c_long, C.c_int)
+
     class Database(C.Structure):
-        _fields_ = [('name', C.c_char_p), ('fd', C.c_int),
-                    ('read_at', io_callback), ('write_at', io_callback)]
+        _fields_ = [('name', C.c_char_p), ('fd', C.c_int), ('exclusive', C.c_int),
+                    ('size', size_callback), ('read_at', io_callback), ('write_at', io_callback)]
 
     @io_callback
     def read_at(fd, dest, size, offset):
@@ -297,23 +300,26 @@ def check_database_open(lib, arch, image, arena):
 
     lib.mac9_run_database.argtypes = lib.mac9_run.argtypes[:-1]+[C.POINTER(Database), C.POINTER(Stop)]
     argv = [b'sqlite3', b'-batch', b'-noheader', b'-init', b'/dev/null',
-            b'phase4.db', b'CREATE TABLE items(id PRIMARY KEY);']
+            b'phase4.db', b'SELECT id FROM items;PRAGMA integrity_check;']
     stop = Stop()
     with tempfile.TemporaryFile() as file:
-        database = Database(b'phase4.db', file.fileno(), read_at, write_at)
+        import fcntl
+        file.write(database_bytes)
+        file.flush()
+        fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        database = Database(b'phase4.db', file.fileno(), 1, size_callback(lambda fd: os.fstat(fd).st_size), read_at, write_at)
         status = lib.mac9_run_database(image, len(image), arena, len(arena), GUARD, len(argv),
                                        (C.c_char_p*len(argv))(*argv), 16777216, None, None, 0,
                                        C.byref(database), C.byref(stop))
-        symbol = image[stop.name:].split(b'\0', 1)[0]
-        expected = b'_fcntl'
-        if (status != 1 or symbol != expected or (stop.arg0, stop.arg1) != (3, 7) or
-                os.fstat(file.fileno()).st_size):
-            raise ValueError(f'{arch}: unexpected granted SQLite open result {status}, {symbol!r}')
-    return dict(first_pending_import=symbol.decode(), descriptor=stop.arg0,
-                fcntl_command=stop.arg1, steps=stop.steps)
+        file.seek(0)
+        actual = bytes(stop.stdout_data[:stop.stdout_bytes])
+        if (status, stop.exit_code, actual, stop.stderr_bytes, file.read()) != (
+                2, 0, b'42\nok\n', 0, database_bytes):
+            raise ValueError(f'{arch}: file-backed SQLite read or integrity check failed')
+    return dict(stdout_hex=actual.hex(), steps=stop.steps, database_sha256=sha256(database_bytes))
 
 
-def check_execution(lib, arch, image, cases):
+def check_execution(lib, arch, image, cases, database_bytes):
     lib.mac9_run.argtypes = [C.c_void_p, C.c_uint, C.c_void_p, C.c_uint, C.c_ulonglong,
                             C.c_uint, C.POINTER(C.c_char_p), C.c_uint, C.c_char_p,
                             C.c_void_p, C.c_uint, C.POINTER(Stop)]
@@ -342,7 +348,7 @@ def check_execution(lib, arch, image, cases):
     executions['disk_without_grant'] = run(
         'disk without grant', [*CASES['query'][:-2], database, 'CREATE TABLE items(id PRIMARY KEY);'],
         dict(stdout_hex='', stderr_hex=error.encode().hex(), exit_code=1))
-    executions['disk_open_boundary'] = check_database_open(lib, arch, image, arena)
+    executions['disk_read'] = check_database_open(lib, arch, image, arena, database_bytes)
     return executions
 
 
@@ -368,7 +374,10 @@ def audit(lib, references, output, execute=False):
         mapped = check_map(lib, arch, image, layout)
         results[arch] = dict(reference=receipt, **mapped, guest_execution_verified=execute)
         if execute:
-            results[arch]['hosted_cases'] = check_execution(lib, arch, image, receipt['cases'])
+            database = (ref/'phase4.db').read_bytes()
+            if sha256(database) != receipt['file_reference']['database_sha256']:
+                raise ValueError(f'{arch}: reference database digest differs')
+            results[arch]['hosted_cases'] = check_execution(lib, arch, image, receipt['cases'], database)
             if arch == 'arm64':
                 from compact_c4_arm_instructions import check_arm_instructions
                 results[arch].update(check_arm_instructions(lib, image))

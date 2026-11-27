@@ -498,6 +498,22 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, i);
             *result = (unsigned int)-1;
         }
+    }else if((!strcmp(name, "_fstat") || !strcmp(name, "_fstat$INODE64")) && a0==3 && thread->database_open){
+        long size = thread->database->size(thread->database->fd);
+        if(size<0){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 5);
+            *result = (unsigned int)-1;
+        }else{
+            dest = guest_write(plan, arena, stack, a1, 144, 1);
+            if(!dest)
+                return -1;
+            memset(dest, 0, 144);
+            write_le(dest+4, 2, 0100600);
+            write_le(dest+6, 2, 1);
+            write_le(dest+8, 8, 3);
+            write_le(dest+96, 8, size);
+            write_le(dest+112, 4, 4096);
+        }
     }else if(!strcmp(name, "_stat") || !strcmp(name, "_stat$INODE64") ||
              !strcmp(name, "_lstat") || !strcmp(name, "_lstat$INODE64")){
         count = string_length(plan, arena, stack, a0, PathBytes);
@@ -727,6 +743,24 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
             write_le(dest+64, 4, 0x1000); /* MNT_LOCAL */
             memcpy(dest+72, "ryzova", 7);
             dest[88] = '/';
+        }
+    }else if(!strcmp(name, "_fcntl") && a0==3 && thread->database_open && (a1==7 || a1==8)){
+        /* Darwin F_SETLK and F_SETLKW. A stronger host lock spans the entire launch. */
+        if(varargs){
+            left = guest_read(plan, arena, stack, varargs, 8, 1);
+            if(!left)
+                return -1;
+            a2 = read_le(left, 8);
+        }
+        left = guest_read(plan, arena, stack, a2, 24, 1);
+        if(!left)
+            return -1;
+        i = read_le(left+20, 2);
+        if(!thread->database->exclusive || (i==3 && !thread->database_writable) ||
+           (i!=1 && i!=2 && i!=3) || read_le(left+22, 2)!=0 ||
+           (read_le(left, 8)>>63) || (read_le(left+8, 8)>>63)){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, thread->database->exclusive ? 22 : 35);
+            *result = (unsigned int)-1;
         }
     }else if(!strcmp(name, "_close") && a0==3 && thread->database_open){
         thread->database_open = 0;
@@ -2227,7 +2261,7 @@ mac9_run_database(const unsigned char *image, unsigned int length, unsigned char
     Mac8Heap *heap;
     Thread thread = {0};
     int status = 0;
-    if(database && (!mac9_grant_name(database->name) || database->fd<0 || !database->read_at || !database->write_at))
+    if(database && (!mac9_grant_name(database->name) || database->fd<0 || !database->size || !database->read_at || !database->write_at))
         return 0;
     if(!out || !arena || capacity<StackBytes || !argc || argc>(Envp-Argv)/8-1 ||
        !argv || !budget || budget>Mac8MaxBudget || input_bytes>Mac8InputLimit ||
