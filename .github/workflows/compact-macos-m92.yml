@@ -2,6 +2,7 @@ name: Compact macOS M9 SQLite qualification
 on:
   pull_request:
     paths:
+      - '.github/workflows/phase3-native-build.yml'
       - 'ryzova/compat/macos/**'
       - 'ryzova/compat/windows/cpu.c'
       - 'scripts/compact_macos_m8_native.py'
