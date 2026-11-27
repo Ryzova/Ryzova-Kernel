@@ -87,6 +87,8 @@ jobs:
           qemu-img create -f qcow2 -F qcow2 -b 9front.qcow2 native-build-overlay.qcow2
       - name: Transfer exact Git checkout kernel source and run Plan 9 mk
         run: python3 scripts/phase3-native-build.py native-build-overlay.qcow2
+      - name: Compare BusyBox report after guest reboot with Linux
+        run: python3 scripts/phase9_busybox_report.py native-build-overlay.qcow2
       - name: Evaluate M5 native ARM64 cross-build vs operational gates
         if: always()
         run: python3 scripts/m5_server_gates.py --cross-report artifacts/phase3/m5-arm64-native-build.json --output artifacts/phase3/m5-full-gates.json
@@ -106,6 +108,8 @@ jobs:
         with:
           name: phase3-native-build-evidence
           path: |
+            artifacts/phase3/busybox-report*.log
+            artifacts/phase3/busybox-report.json
             artifacts/phase3/serial.log
             artifacts/phase3/host.log
             artifacts/phase3/fresh-boot-serial.log
