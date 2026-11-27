@@ -305,7 +305,7 @@ def check_database_open(lib, arch, image, arena):
                                        (C.c_char_p*len(argv))(*argv), 16777216, None, None, 0,
                                        C.byref(database), C.byref(stop))
         symbol = image[stop.name:].split(b'\0', 1)[0]
-        expected = b'_fstatfs$INODE64' if arch == 'x86_64' else b'_fstatfs'
+        expected = b'_fcntl'
         if status != 1 or symbol != expected or os.fstat(file.fileno()).st_size:
             raise ValueError(f'{arch}: unexpected granted SQLite open result {status}, {symbol!r}')
     return dict(first_pending_import=symbol.decode(), steps=stop.steps)

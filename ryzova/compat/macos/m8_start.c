@@ -696,6 +696,38 @@ service_call(const Mac8Image *plan, unsigned char *arena, unsigned char *stack,
         write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4,
                  !strcmp((const char *)left, "/dev/urandom") ? 2 : 13);
         *result = (unsigned int)-1;
+    }else if(!strcmp(name, "_fstatfs") || !strcmp(name, "_fstatfs$INODE64") ||
+             !strcmp(name, "_statfs") || !strcmp(name, "_statfs$INODE64")){
+        if(name[1]=='s'){
+            count = string_length(plan, arena, stack, a0, PathBytes);
+            if(count<0)
+                return -1;
+            left = guest_read(plan, arena, stack, a0, count+1, 1);
+            if(!left)
+                return -1;
+            if(!thread->database || (strcmp((const char *)left, "/") &&
+               strcmp((const char *)left+(*left=='/'), thread->database->name))){
+                write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 2);
+                *result = (unsigned int)-1;
+                return 1;
+            }
+        }
+        if(name[1]=='f' && (a0!=3 || !thread->database_open)){
+            write_le(arena+(ERRNO_ADDRESS-MAC8_BASE), 4, 9);
+            *result = (unsigned int)-1;
+        }else{
+            /* Darwin LP64 statfs64. Report the bounded virtual volume. */
+            dest = guest_write(plan, arena, stack, a1, 2168, 1);
+            if(!dest)
+                return -1;
+            memset(dest, 0, 2168);
+            write_le(dest, 4, 4096);
+            write_le(dest+4, 4, 4096);
+            write_le(dest+8, 8, 16);
+            write_le(dest+64, 4, 0x1000); /* MNT_LOCAL */
+            memcpy(dest+72, "ryzova", 7);
+            dest[88] = '/';
+        }
     }else if(!strcmp(name, "_close") && a0==3 && thread->database_open){
         thread->database_open = 0;
     }else if((!strcmp(name, "_pread") || !strcmp(name, "_pwrite")) && a0==3 && thread->database_open){
