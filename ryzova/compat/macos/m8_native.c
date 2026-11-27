@@ -104,7 +104,8 @@ main(int argc, char **argv)
             if(barrier<0)
                 sysfatal("open database barrier: %r");
         }
-        if(!mac9_grant_name(database.name) || !mac_grant_init(database_dir))
+        if(!mac9_grant_name(database.name) ||
+           !(barrier>=0 ? mac_grant_init_journal_root(database_dir) : mac_grant_init(database_dir)))
             sysfatal("invalid database grant");
         database.fd = mac_grant_open_database(database.name);
         if(database.fd<0)

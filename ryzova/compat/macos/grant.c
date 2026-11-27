@@ -22,14 +22,28 @@ static Dir *root_identity;
 static int rootfd = -1;
 #endif
 
+#ifdef MAC_PLAN9
+static int
+pin_root(char *path, int flags)
+{
+    if(rfork(RFNAMEG)<0 || bind(path, "/mnt", flags)<0)
+        return 0;
+    root_identity = dirstat("/mnt");
+    return root_identity!=nil && (root_identity->mode&DMDIR)!=0;
+}
+
+int
+mac_grant_init_journal_root(char *path)
+{
+    return pin_root(path, MREPL|MCREATE);
+}
+#endif
+
 int
 mac_grant_init(char *path)
 {
 #ifdef MAC_PLAN9
-    if(rfork(RFNAMEG)<0 || bind(path, "/mnt", MREPL)<0)
-        return 0;
-    root_identity = dirstat("/mnt");
-    return root_identity!=nil && (root_identity->mode&DMDIR)!=0;
+    return pin_root(path, MREPL);
 #else
     rootfd = open(path, O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
     return rootfd>=0;
@@ -208,10 +222,17 @@ mac_grant_journal_open(int database, int create_new)
     if(barrier<0 || journal_failed || !create_new)
         return -1;
     fd = create(journal_path, ORDWR|OEXCL, 0600);
-    if(fd<0)
+    if(fd<0){
+        fprint(2, "create rollback journal %s: %r\n", journal_path);
         return -1;
+    }
     file = dirfstat(fd);
     if(!ordinary(file, 0)){
+        if(file)
+            fprint(2, "journal metadata type=%ud dev=%ud qid=%ux mode=%lux size=%lld (root %ud/%ud)\n",
+                   file->type, file->dev, file->qid.type, file->mode, file->length, root_identity->type, root_identity->dev);
+        else
+            fprint(2, "stat rollback journal: %r\n");
         close(fd);
         fd = -1;
     }
