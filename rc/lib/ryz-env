@@ -2,27 +2,27 @@
 # ryz env linux|windows|macos
 # ryz run <arguments to the selected Compact launcher>
 fn ryz {
-	switch($1){
+	switch("$1"){
 	case env
 		if(! ~ $#* 2){
 			echo 'usage: ryz env linux|windows|macos' >[1=2]
-			return usage
+			status=usage
 		}
-		switch($2){
+		if not switch($2){
 		case linux windows macos
 			ryzenv=$2
 			prompt=('ryz['^$ryzenv^']> ' '    ')
 		case *
 			echo 'unknown Ryzova environment:' $2 >[1=2]
-			return usage
+			status=usage
 		}
 	case run
 		shift
 		if(~ $#* 0){
 			echo 'usage: ryz run <compact launcher arguments>' >[1=2]
-			return usage
+			status=usage
 		}
-		switch($ryzenv){
+		if not switch("$ryzenv"){
 		case linux
 			/amd64/bin/compact-linux $*
 		case windows
@@ -31,10 +31,10 @@ fn ryz {
 			/amd64/bin/compact-macos-m8 --run $*
 		case *
 			echo 'select an environment with ryz env first' >[1=2]
-			return usage
+			status=usage
 		}
 	case *
 		echo 'usage: ryz env linux|windows|macos or ryz run <launcher arguments>' >[1=2]
-		return usage
+		status=usage
 	}
 }
