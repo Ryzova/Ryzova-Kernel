@@ -18,7 +18,7 @@ from compact_c3_remote import FILENAME as REMOTE_FILE, MOUNT as REMOTE_ROOT, SEC
 from compact_windows_w2 import ROOT, PREFERRED
 from compact_windows_w6_native import bootstrap_provenance, digest, extract_kernel, parse_cases, session, standalone
 from compact_windows_w7_tls import tls_fixture, verify_reference
-from compact_windows_w7_jq import ARGS as JQ_ARGS, INPUT as JQ_INPUT, verify_reference as verify_jq_reference
+from compact_windows_w7_jq import EXTRA_INPUTS, ARGS as JQ_ARGS, INPUT as JQ_INPUT, verify_reference as verify_jq_reference
 from compact_windows_w7_trace import api_grant_words
 from compact_windows_w7_imports import verify_reference as verify_import_reference, EXPECTED_CALLS
 from compact_windows_w7_startup import verify_reference as verify_startup_reference, EXPECTED_CALLS as STARTUP_CALLS, LOW_MASK, HIGH_MASK
@@ -116,6 +116,15 @@ def main():
     jq_reference = verify_jq_reference(args.reference)
     images['jq'] = (args.reference/'jq.exe').read_bytes()
     cases['jq-readonly'] = jq_case(jq_reference, JQ_ARGS, root=JQ_ROOT)
+    for name, data in EXTRA_INPUTS.items():
+        filename = name + '.json'
+        path = out / filename
+        path.write_bytes(data)
+        sample = jq_reference['input_cases'][name]
+        argv = [*JQ_ARGS[:-1], filename]
+        if sample['argv'] != argv or sample['input_sha256'] != digest(path):
+            raise ValueError(f'Windows reference input mismatch: {name}')
+        cases['jq-' + name] = jq_case(sample, argv, root=JQ_ROOT)
     cases['jq-version'] = jq_case(dict(exit_code=0, stdout_hex=VERSION_STDOUT.hex(), stderr_hex=''),
                                   ['-b', '--version'])
     cases['jq-no-grant'] = jq_case(dict(exit_code=2, stdout_hex='', stderr_hex=JQ_DENIED.hex()), JQ_ARGS)
@@ -181,6 +190,9 @@ def main():
             commands.append(f'hget http://10.0.2.2:8000/{name}.exe > /tmp/cw-{name}.exe; sha1sum -2 256 /tmp/cw-{name}.exe')
         commands.append(f'mkdir -p {JQ_ROOT}; hget http://10.0.2.2:8000/{INPUT_NAME} > {JQ_INPUT_PATH}; sha1sum -2 256 {JQ_INPUT_PATH}')
         commands.append(f'hget http://10.0.2.2:8000/{CANARY_NAME} > {CANARY_PATH}; sha1sum -2 256 {CANARY_PATH}')
+        for name in EXTRA_INPUTS:
+            filename = name + '.json'
+            commands.append(f'hget http://10.0.2.2:8000/{filename} > {JQ_ROOT}/{filename}; sha1sum -2 256 {JQ_ROOT}/{filename}')
         for name in launchers:
             commands.append(f'hget http://10.0.2.2:8000/{name}.rc > /tmp/{name}.rc; sha1sum -2 256 /tmp/{name}.rc')
         with route_fixture(commit) as route:
@@ -229,7 +241,16 @@ def main():
         for name in launchers:
             case, record = cases[name], records[name]
             record.update(stdout_hex=case['out'], stderr_hex=case['err'])
-            if name not in ('jq-readonly', 'jq-remote', 'jq-remote-recovered'):
+            sample_name = name.removeprefix('jq-')
+            if sample_name in EXTRA_INPUTS:
+                sample = jq_reference['input_cases'][sample_name]
+                path = re.escape(f'{JQ_ROOT}/{sample_name}.json'.encode())
+                if re.findall(rb'(?m)^([0-9a-f]{64})[ \t]+' + path + rb'\r?$', fresh) != [sample['input_sha256'].encode()]:
+                    raise ValueError(f'native input digest mismatch: {name}')
+                if (record.get('rights'), record.get('read_bytes'), record.get('write_bytes')) != (
+                        JQ_READ_ONLY, len(EXTRA_INPUTS[sample_name]), 0):
+                    raise ValueError(f'native file access mismatch: {name}')
+            elif name not in ('jq-readonly', 'jq-remote', 'jq-remote-recovered'):
                 rights = JQ_READ_ONLY if name == 'jq-parent-escape' else 0
                 if record.get('rights') != rights or any(record.get(key) != 0 for key in (
                         'read_bytes', 'write_bytes', 'peak_handles')):
