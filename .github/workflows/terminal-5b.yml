@@ -1,0 +1,33 @@
+name: Terminal 5B native C builds
+on:
+  pull_request:
+    paths:
+      - scripts/ryz_build.py
+      - examples/terminal5b/**
+      - .github/workflows/terminal-5b.yml
+permissions:
+  contents: read
+jobs:
+  build-and-run:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, target: linux}
+          - {os: windows-latest, target: windows}
+          - {os: macos-latest, target: macos}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and verify checksum and error exits
+        shell: python
+        run: |
+          import pathlib, subprocess, sys
+          target = "${{ matrix.target }}"
+          path = subprocess.check_output([sys.executable, "scripts/ryz_build.py", target, "examples/terminal5b/checksum.c"], text=True).strip()
+          sample = pathlib.Path("sample.bin")
+          sample.write_bytes(b"hello")
+          result = subprocess.run([path, str(sample)], capture_output=True, text=True, check=True)
+          assert result.stdout.splitlines() == ["4f9f2cab"]
+          assert subprocess.run([path, "missing.bin"]).returncode == 1
+          assert subprocess.run([path]).returncode == 2
