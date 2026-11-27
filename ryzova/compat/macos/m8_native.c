@@ -93,6 +93,7 @@ main(int argc, char **argv)
         if(database.fd<0)
             sysfatal("open granted database: %r");
         database.exclusive = 1;
+        database.journal = nil;
         database.size = mac_grant_size;
         database.read_at = mac_grant_read;
         database.write_at = mac_grant_write;
