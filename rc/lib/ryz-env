@@ -3,13 +3,33 @@
 # ryz run <arguments to the selected Compact launcher>
 fn ryz {
 	switch($"1){
+	case help
+		echo 'ryz env TARGET                 select a launcher'
+		echo 'ryz env trans WORKFLOW TARGET  select workflow and launcher'
+		echo 'ryz status                     show session and directory'
+		echo 'ryz run ARGS                   invoke selected Compact launcher'
+		echo 'Available environments: windows macos linux'
+	case status
+		if(~ $#ryzenv 0) echo 'No environment selected'
+		if not {
+			echo workflow $ryzworkflow
+			echo target $ryzenv
+		}
+		pwd
 	case env
-		if(! ~ $#* 2){
+		if(~ $#* 4 && ~ $2 trans && ~ $3 windows macos linux && ~ $4 windows macos linux){
+			ryzworkflow=$3
+			ryzenv=$4
+			prompt=('ryz['^$ryzworkflow^'->'^$ryzenv^']> ' '    ')
+			status=''
+		}
+		if not if(! ~ $#* 2){
 			echo 'usage: ryz env linux|windows|macos' >[1=2]
 			status=usage
 		}
 		if not switch($2){
 		case linux windows macos
+			ryzworkflow=$2
 			ryzenv=$2
 			prompt=('ryz['^$ryzenv^']> ' '    ')
 			status=''
@@ -35,7 +55,7 @@ fn ryz {
 			status=usage
 		}
 	case *
-		echo 'usage: ryz env linux|windows|macos or ryz run <launcher arguments>' >[1=2]
+		echo 'unknown command; type ryz help' >[1=2]
 		status=usage
 	}
 }
