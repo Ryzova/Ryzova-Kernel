@@ -18,19 +18,12 @@ def main(image):
     first, second = [secrets.token_hex(8) for _ in range(2)]
     body = lambda token: f'int main(void){{puts("{token}");return 0;}}'
     source = ('#include <stdio.h>\n' + body(second) + '\n').encode()
-    project = Path('rc/lib/ryz-env').read_bytes()
     endpoint = '/' + secrets.token_hex(20)
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
         # The CI adapter only compiles the exact generated fixture. Its result is
         # sent back to the guest and later executed on the macOS reference runner.
         class Adapter(BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path != endpoint:
-                    self.send_error(404)
-                    return
-                self.reply(project)
-
             def reply(self, data):
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(data)))
@@ -58,7 +51,7 @@ def main(image):
             url = f'http://10.0.2.2:{server.server_port}{endpoint}'
             commands = [
                 'ip/ipconfig -d ether /net/ether0; webfs',
-                f'hget {url} >/tmp/devloop-rc && . /tmp/devloop-rc',
+                '. /rc/lib/ryz-env && ryz help',
                 'mkdir /tmp/devloop && cd /tmp/devloop && ryz env native',
                 f"echo '#include <stdio.h>' >main.c; echo '{body(first)}' >>main.c",
                 'ryz build && ryz run && echo RYZ_FIRST_OK',
