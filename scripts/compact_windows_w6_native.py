@@ -158,11 +158,19 @@ def verify_fault_fixture(log,sha):
         raise ValueError('fault-test PE missing or checksum mismatch after reboot')
     return True
 
-def session(image,commands,out,label,timeout,required=None,resource=None,hardcut=False,fault_config=None):
+def session(image,commands,out,label,timeout,required=None,resource=None,hardcut=False,fault_config=None,boot_controller='scsi'):
     raw=bytearray();socketdir=tempfile.TemporaryDirectory(prefix='cw6-');ser=Path(socketdir.name)/'serial'
     cmd=['qemu-system-x86_64','-machine','pc,accel=tcg','-cpu','qemu64','-m','2048','-smp','2','-device','virtio-scsi-pci,id=scsi',
          '-drive',f'if=none,id=vd0,file={image},format=qcow2','-device','scsi-hd,drive=vd0,scsi-id=0','-device','virtio-net-pci,netdev=n0','-netdev','user,id=n0',
          '-vga','std','-display','none','-chardev',f'socket,id=uart,path={ser},server=on,wait=off','-serial','chardev:uart','-monitor','none','-no-reboot','-no-shutdown']
+    boot_reply = b'\r'
+    if boot_controller == 'block':
+        first = cmd.index('virtio-scsi-pci,id=scsi') - 1
+        cmd[first:first+6] = ['-drive', f'if=none,id=vd0,file={image},format=qcow2',
+                              '-device', 'virtio-blk-pci,drive=vd0']
+        boot_reply = b'local!/dev/sdF0/fs\r'
+    elif boot_controller != 'scsi':
+        raise ValueError('unknown boot storage controller')
     if resource is not None:
         if fault_config is None:cmd+=['-drive',f'if=none,id=cwres,file={resource},format=qcow2,cache=writeback']
         else:
@@ -187,7 +195,7 @@ def session(image,commands,out,label,timeout,required=None,resource=None,hardcut
                     data=client.recv(65536)
                     if data:raw.extend(data)
                 tail=bytes(raw[-40000:])
-                if b'bootargs is ' in tail and not bootargs:client.sendall(b'\r');bootargs=True
+                if b'bootargs is ' in tail and not bootargs:client.sendall(boot_reply);bootargs=True
                 if bootargs and (b'user[glenda]:' in tail or b'user:' in tail) and not login:client.sendall(b'glenda\r');login=True
                 if login and b'term%' in tail and not sent:
                     line=(commands[stage]+f'; echo CW6_STAGE_{stage}\r').encode()
