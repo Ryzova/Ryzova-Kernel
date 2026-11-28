@@ -27,7 +27,8 @@ def commands(commit):
     ops += ['cat /compact/linux/sockets','echo FLEX_SOCKETS_BEGIN']
     for mode in CASES:ops.append(f'$c -j /tmp/sk-raw {mode} N_{mode}_{commit} && echo FLEX_SOCKET_{mode}_OK')
     ops += [
-        '. /tmp/ryz-env && ryz env linux && echo RYZ_5D_ENV_OK',
+        '. /tmp/ryz-env && ryz help && ryz env trans windows linux',
+        'ryz status && ~ $ryzworkflow windows && ~ $ryzenv linux && echo RYZ_5D_ENV_OK',
         f'ryz run -j -b 4194304 $l /tmp/sk-http H_{commit} > /tmp/ryz-http-log && echo FLEX_HTTP_RUN_OK',
         'cat /tmp/ryz-http-log',
         f"cat /tmp/ryz-http-log | grep '^H_{commit}$' > /tmp/ryz-http-body",
