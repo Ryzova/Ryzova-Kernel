@@ -26,10 +26,11 @@ def main(image):
                 commands = ['ip/ipconfig -d ether /net/ether0; webfs',
                             f'hget http://10.0.2.2:{port}/challenge >/tmp/h3-net && echo H3_FETCH_OK',
                             'sha1sum -2 256 /tmp/h3-net']
-                for model, driver in [('virtio-net-pci', 'virtio'), ('e1000', 'igbe')]:
+                for model, drivers in [('virtio-net-pci', ('virtio',)), ('e1000', ('igbe', 'i82543'))]:
                     log = session(image, commands, out, 'h3-' + model, 150,
                                   required={1: 'H3_FETCH_OK'}, net_model=model)
-                    if not any(line.startswith(f'#l0: {driver}:'.encode()) for line in log.splitlines()):
+                    prefixes = tuple(f'#l0: {driver}:'.encode() for driver in drivers)
+                    if not any(line.startswith(prefixes) for line in log.splitlines()):
                         raise ValueError(f'missing guest attachment for {model}')
                     check_hash(log, '/tmp/h3-net', hashlib.sha256(payload).hexdigest())
             finally:
