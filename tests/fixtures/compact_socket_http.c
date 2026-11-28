@@ -35,6 +35,7 @@ int main(int argc,char **argv)
     while((n=read(client,response+used,sizeof response-1-used))>0){used+=(size_t)n;if(used==sizeof response-1)return 69;}
     response[used]=0;
     if(n<0 || close(client) || pthread_join(thread,0) || close(listener) || problem)return 70;
-    if(!strstr(response,"HTTP/1.1 200 OK\r\n") || !strstr(response,challenge))return 71;
-    puts("FLEX_SOCKET_HTTP_OK");puts(challenge);return 0;
+    char *body=strstr(response,"\r\n\r\n");
+    if(strncmp(response,"HTTP/1.1 200 OK\r\n",17) || !body || strcmp(body+4,challenge))return 71;
+    puts("FLEX_SOCKET_HTTP_OK");puts(body+4);return 0;
 }

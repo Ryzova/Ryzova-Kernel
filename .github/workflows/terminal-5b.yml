@@ -59,3 +59,64 @@ jobs:
           with tempfile.TemporaryDirectory() as workspace:
               subprocess.run([pathlib.Path(binary).resolve()], cwd=workspace, check=True)
               assert not list(pathlib.Path(workspace).iterdir())
+      - name: Package CLI and verify a clean installation
+        shell: python
+        run: |
+          import hashlib, json, pathlib, shutil, subprocess, tempfile, zipfile
+          target = "${{ matrix.target }}"
+          name = "checksum.exe" if target == "windows" else "checksum"
+          binary = pathlib.Path("build", target, name)
+          digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+          package = pathlib.Path(f"checksum-{target}-amd64.zip")
+          with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
+              archive.write(binary, name)
+              archive.writestr("manifest.json", json.dumps(dict(target=target, arch="amd64", binary=name, sha256=digest)))
+          with tempfile.TemporaryDirectory() as temp:
+              install = pathlib.Path(temp)
+              shutil.unpack_archive(package, install)
+              manifest = json.loads((install / "manifest.json").read_text())
+              executable = install / manifest["binary"]
+              assert hashlib.sha256(executable.read_bytes()).hexdigest() == digest == manifest["sha256"]
+              executable.chmod(0o755)
+              (install / "sample").write_bytes(b"hello")
+              output = subprocess.check_output([executable, "sample"], cwd=install, text=True)
+              assert output.splitlines() == ["4f9f2cab"]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksum-${{ matrix.target }}-amd64
+          path: checksum-${{ matrix.target }}-amd64.zip
+          if-no-files-found: error
+  qualify:
+    needs: build-and-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: checksum-*-amd64
+          path: packages
+      - name: Verify the published three-platform package set
+        shell: python
+        run: |
+          import hashlib, json, pathlib, struct, zipfile
+          root = pathlib.Path("packages")
+          targets = ("linux", "windows", "macos")
+          expected = {f"checksum-{target}-amd64" for target in targets}
+          assert {p.name for p in root.iterdir()} == expected
+          for target in targets:
+              package = f"checksum-{target}-amd64"
+              name = "checksum.exe" if target == "windows" else "checksum"
+              with zipfile.ZipFile(root / package / (package + ".zip")) as archive:
+                  assert sorted(archive.namelist()) == sorted([name, "manifest.json"])
+                  data = archive.read(name)
+                  manifest = json.loads(archive.read("manifest.json"))
+              assert manifest == dict(target=target, arch="amd64", binary=name, sha256=hashlib.sha256(data).hexdigest())
+              if target == "windows":
+                  assert data[:2] == b"MZ"
+                  offset = struct.unpack_from("<I", data, 60)[0]
+                  assert data[offset:offset+6] == bytes.fromhex("504500006486")
+              elif target == "linux":
+                  assert data[:6] == bytes.fromhex("7f454c460201")
+                  assert struct.unpack_from("<H", data, 18)[0] == 62
+              else:
+                  assert data[:8] == bytes.fromhex("cffaedfe07000001")
+              print(target, manifest["sha256"])
