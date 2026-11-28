@@ -22,6 +22,7 @@ fn ryz {
 			for(ryzdisk in /dev/sd*){
 				if(test -e $ryzdisk/ctl) echo $ryzdisk
 			}
+			status=''
 		}
 		if not if(~ $#* 3 && ~ $2 info){
 			@{
