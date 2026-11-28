@@ -440,7 +440,7 @@ with (OUT/"fresh-kernel-qemu-host.log").open("wb") as host:
                 pos=tail.rfind(b"\n"+marker+b"\r")
                 if pos < 0:
                     pos=tail.rfind(b"\n"+marker+b"\n")
-                if pos >= 0 and b"term%" in tail[pos+len(marker)+1:]:
+                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
                     time.sleep(.15)
                     guest.sendall(b"cat '#P/drivercandidates' | grep 'auto-bind=no' > /dev/null && echo RYZOVA_M0_PCI_OK\r")
                     bootstate["m0_probe_sent"]=True
