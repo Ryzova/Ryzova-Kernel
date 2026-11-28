@@ -211,6 +211,12 @@ def session(image,commands,out,label,timeout,required=None,resource=None,hardcut
                     for offset in range(0,len(line),8):
                         client.sendall(line[offset:offset+8]);time.sleep(.01)
                     if key_stages and stage in key_stages:
+                        deadline = time.monotonic() + 10
+                        while not standalone(bytes(raw[-8192:]), 'H3_INPUT_READY'):
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError('guest editor command was not accepted')
+                            if select.select([client], [], [], .2)[0]:
+                                raw.extend(client.recv(4096))
                         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as keys:
                             keys.settimeout(5)
                             keys.connect(str(monitor))
