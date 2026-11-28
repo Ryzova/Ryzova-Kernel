@@ -12,6 +12,7 @@ fn ryz {
 		case linux windows macos
 			ryzenv=$2
 			prompt=('ryz['^$ryzenv^']> ' '    ')
+			status=''
 		case *
 			echo 'unknown Ryzova environment:' $2 >[1=2]
 			status=usage
