@@ -59,8 +59,8 @@ class SocketTests(unittest.TestCase):
         lines=['linux-amd64-local-sockets-v1']+[digests[n]+'  /tmp/'+v for n,v in net.NAMES.items()]
         lines += [f'RYZOVA_RUNTIME_STAGE_{i}' for i in range(net.start(commit),net.start(commit)+len(net.commands(commit))-1)]+['FLEX_SOCKETS_BEGIN']
         for mode in net.CASES:lines += [f'FLEX_SOCKETS_OK {mode}',f'N_{mode}_{commit}',f'FLEX_SOCKET_{mode}_OK',result]
-        lines += ['FLEX_SOCKET_HTTP_OK','H_'+commit,'FLEX_HTTP_RUN_OK',result,'RYZ_5D_ENV_OK','RYZ_5D_PIPE_OK','RYZ_5D_ERROR_OK','FLEX_SOCKETS_END','FLEX_SOCKETS_DONE'];serial=('\n'.join(lines)+'\n').encode()
+        lines += ['FLEX_SOCKET_HTTP_OK','H_'+commit,'FLEX_HTTP_RUN_OK',result,'RYZ_5D_ENV_OK','RYZ_HW_LIST_OK','RYZ_HW_BIND_OK','RYZ_5D_PIPE_OK','RYZ_5D_ERROR_OK','FLEX_SOCKETS_END','FLEX_SOCKETS_DONE'];serial=('\n'.join(lines)+'\n').encode()
         self.assertTrue(net.inspect(serial,commit,digests)['passed'])
-        for token in ('RYZ_5D_PIPE_OK','RYZ_5D_ERROR_OK','RYZ_5D_ENV_OK','FLEX_SOCKETS_DONE','FLEX_HTTP_RUN_OK','N_unix_'+commit,'b'*64):self.assertFalse(net.inspect(serial.replace(token.encode(),b'MISSING'),commit,digests)['passed'])
+        for token in ('RYZ_HW_LIST_OK','RYZ_HW_BIND_OK','RYZ_5D_PIPE_OK','RYZ_5D_ERROR_OK','RYZ_5D_ENV_OK','FLEX_SOCKETS_DONE','FLEX_HTTP_RUN_OK','N_unix_'+commit,'b'*64):self.assertFalse(net.inspect(serial.replace(token.encode(),b'MISSING'),commit,digests)['passed'])
         self.assertFalse(net.inspect(serial.replace(b'exit=0',b'exit=1',1),commit,digests)['passed']);self.assertTrue(all(len(c)<220 for c in net.commands(commit)))
 if __name__=='__main__':unittest.main()
