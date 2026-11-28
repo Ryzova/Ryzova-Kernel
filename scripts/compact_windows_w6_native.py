@@ -158,10 +158,10 @@ def verify_fault_fixture(log,sha):
         raise ValueError('fault-test PE missing or checksum mismatch after reboot')
     return True
 
-def session(image,commands,out,label,timeout,required=None,resource=None,hardcut=False,fault_config=None,boot_controller='scsi'):
+def session(image,commands,out,label,timeout,required=None,resource=None,hardcut=False,fault_config=None,boot_controller='scsi',net_model='virtio-net-pci'):
     raw=bytearray();socketdir=tempfile.TemporaryDirectory(prefix='cw6-');ser=Path(socketdir.name)/'serial'
     cmd=['qemu-system-x86_64','-machine','pc,accel=tcg','-cpu','qemu64','-m','2048','-smp','2','-device','virtio-scsi-pci,id=scsi',
-         '-drive',f'if=none,id=vd0,file={image},format=qcow2','-device','scsi-hd,drive=vd0,scsi-id=0','-device','virtio-net-pci,netdev=n0','-netdev','user,id=n0',
+         '-drive',f'if=none,id=vd0,file={image},format=qcow2','-device','scsi-hd,drive=vd0,scsi-id=0','-device',f'{net_model},netdev=n0','-netdev','user,id=n0',
          '-vga','std','-display','none','-chardev',f'socket,id=uart,path={ser},server=on,wait=off','-serial','chardev:uart','-monitor','none','-no-reboot','-no-shutdown']
     boot_reply = b'\r'
     if boot_controller == 'block':
