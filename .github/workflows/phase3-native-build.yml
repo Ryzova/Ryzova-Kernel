@@ -185,7 +185,7 @@ jobs:
       - name: Execute the exact guest-verified Mach-O
         run: |
           test "$(shasum -a 256 app | cut -d' ' -f1)" = "$(cat digest.txt)"
-          lipo -verify_arch x86_64 app
+          lipo app -verify_arch x86_64
           chmod +x app
           ./app > actual.txt
           cmp expected.txt actual.txt
