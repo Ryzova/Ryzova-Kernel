@@ -47,3 +47,30 @@ jobs:
           assert result.stdout.splitlines() == ["4f9f2cab"]
           assert subprocess.run([path, "missing.bin"]).returncode == 1
           assert subprocess.run([path]).returncode == 2
+      - name: Package CLI and verify a clean installation
+        shell: python
+        run: |
+          import hashlib, json, pathlib, shutil, subprocess, tempfile, zipfile
+          target = "${{ matrix.target }}"
+          name = "checksum.exe" if target == "windows" else "checksum"
+          binary = pathlib.Path("build", target, name)
+          digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+          package = pathlib.Path(f"checksum-{target}-amd64.zip")
+          with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
+              archive.write(binary, name)
+              archive.writestr("manifest.json", json.dumps(dict(target=target, arch="amd64", binary=name, sha256=digest)))
+          with tempfile.TemporaryDirectory() as temp:
+              install = pathlib.Path(temp)
+              shutil.unpack_archive(package, install)
+              manifest = json.loads((install / "manifest.json").read_text())
+              executable = install / manifest["binary"]
+              assert hashlib.sha256(executable.read_bytes()).hexdigest() == digest == manifest["sha256"]
+              executable.chmod(0o755)
+              (install / "sample").write_bytes(b"hello")
+              output = subprocess.check_output([executable, "sample"], cwd=install, text=True)
+              assert output.splitlines() == ["4f9f2cab"]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksum-${{ matrix.target }}-amd64
+          path: checksum-${{ matrix.target }}-amd64.zip
+          if-no-files-found: error
