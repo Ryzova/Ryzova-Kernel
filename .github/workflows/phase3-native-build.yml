@@ -87,6 +87,16 @@ jobs:
           qemu-img create -f qcow2 -F qcow2 -b 9front.qcow2 native-build-overlay.qcow2
       - name: Transfer exact Git checkout kernel source and run Plan 9 mk
         run: python3 scripts/phase3-native-build.py native-build-overlay.qcow2
+      - name: Build and edit a C project from the guest terminal
+        run: |
+          python3 -m venv /tmp/ryz-zig
+          /tmp/ryz-zig/bin/pip install ziglang==0.13.0
+          /tmp/ryz-zig/bin/python scripts/terminal_devloop.py native-build-overlay.qcow2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-requested-macos-cli
+          path: artifacts/phase3/terminal-macos/
+          if-no-files-found: error
       - name: Verify H3 network adapter interchange
         run: python3 scripts/h3_network.py native-build-overlay.qcow2
       - name: Exercise PS/2 and USB keyboards in the terminal editor
@@ -115,6 +125,7 @@ jobs:
           name: phase3-native-build-evidence
           path: |
             artifacts/phase3/busybox-report*.log
+            artifacts/phase3/terminal-devloop*.log
             artifacts/phase3/h3-*.log
             artifacts/phase3/h2-*.log
             artifacts/phase3/h2-storage.json
@@ -163,3 +174,18 @@ jobs:
             artifacts/phase3/screen.ppm
           if-no-files-found: warn
           retention-days: 14
+
+  macos-reference:
+    needs: native-build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: guest-requested-macos-cli
+      - name: Execute the exact guest-verified Mach-O
+        run: |
+          test "$(shasum -a 256 app | cut -d' ' -f1)" = "$(cat digest.txt)"
+          lipo app -verify_arch x86_64
+          chmod +x app
+          ./app > actual.txt
+          cmp expected.txt actual.txt

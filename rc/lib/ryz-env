@@ -3,13 +3,28 @@
 # ryz run <arguments to the selected Compact launcher>
 fn ryz {
 	switch($"1){
+	case help
+		echo 'ryz env TARGET | ryz env trans WORKFLOW TARGET'
+		echo 'ryz status | ryz hw list | ryz hw info /dev/sdUNIT'
+		echo 'ryz build (main.c) | ryz run | ryz run LAUNCHER_ARGS'
+	case status
+		echo workflow $"ryzworkflow
+		echo target $"ryzenv
+		pwd
 	case env
-		if(! ~ $#* 2){
+		if(~ $#* 4 && ~ $2 trans && ~ $3 windows linux macos && ~ $4 windows linux macos){
+			ryzworkflow=$3
+			ryzenv=$4
+			prompt=('ryz['^$ryzworkflow^'->'^$ryzenv^']> ' '    ')
+			status=''
+		}
+		if not if(! ~ $#* 2){
 			echo 'usage: ryz env linux|windows|macos' >[1=2]
 			status=usage
 		}
 		if not switch($2){
-		case linux windows macos
+		case native linux windows macos
+			ryzworkflow=$2
 			ryzenv=$2
 			prompt=('ryz['^$ryzenv^']> ' '    ')
 			status=''
@@ -40,11 +55,54 @@ fn ryz {
 			echo 'usage: ryz hw list or ryz hw info /dev/sdUNIT' >[1=2]
 			status=usage
 		}
+	case build
+		@{
+			if(! ~ $#* 1 || ! test -f main.c){
+				echo 'ryz build requires main.c in the current directory' >[1=2]
+				exit usage
+			}
+			switch($"ryzenv){
+			case '' native
+				target=native
+			case macos
+				target=macos
+				if(~ $#ryzmaccc 0){
+					echo 'set ryzmaccc to a macOS compiler adapter accepting SOURCE OUTPUT' >[1=2]
+					exit toolchain
+				}
+			case *
+				echo 'no build toolchain for' $ryzenv >[1=2]
+				exit toolchain
+			}
+			mkdir -p build/$target || exit $status
+			work=build/$target/work.$pid
+			mkdir $work || exit $status
+			switch($target){
+			case native
+				@{cd $work && pcc -o app ../../../main.c}
+			case macos
+				$ryzmaccc main.c $work/app
+			}
+			result=$status
+			if(~ $"result ''){
+				mv $work/app build/$target/app
+				result=$status
+			}
+			rm -rf $work
+			exit $"result
+		}
 	case run
 		shift
 		if(~ $#* 0){
-			echo 'usage: ryz run <compact launcher arguments>' >[1=2]
-			status=usage
+			switch($"ryzenv){
+			case '' native
+				./build/native/app
+			case macos
+				/amd64/bin/compact-macos-m8 --run build/macos/app -- app
+			case *
+				echo 'usage: ryz run <compact launcher arguments>' >[1=2]
+				status=usage
+			}
 		}
 		if not switch($"ryzenv){
 		case linux

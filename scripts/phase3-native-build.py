@@ -62,7 +62,7 @@ ARCHIVE = OUT / "kernel-source.tar.gz"
 GUEST_IMAGE = Path(sys.argv[1]).resolve()
 SOURCE_SHA = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
-subprocess.run(["tar", "--format=ustar", "--transform=s,^ryzova/compat/linux,sys/src/cmd/compact-linux,", "-czf", str(ARCHIVE), "-C", str(ROOT), "sys/src/9", "sys/include", "amd64/include", "arm64/include", "sys/src/cmd/nusb", "ryzova/compat/linux"], check=True)
+subprocess.run(["tar", "--format=ustar", "--transform=s,^ryzova/compat/linux,sys/src/cmd/compact-linux,", "-czf", str(ARCHIVE), "-C", str(ROOT), "sys/src/9", "sys/include", "amd64/include", "arm64/include", "sys/src/cmd/nusb", "ryzova/compat/linux", "rc/lib/ryz-env"], check=True)
 archive_hash = subprocess.check_output(["sha256sum", str(ARCHIVE)], text=True).split()[0]
 (OUT / "source-provenance.txt").write_text(
     f"Ryzova source commit: {SOURCE_SHA}\nKernel and nusb source archive sha256: {archive_hash}\n"
@@ -440,7 +440,7 @@ with (OUT/"fresh-kernel-qemu-host.log").open("wb") as host:
                 pos=tail.rfind(b"\n"+marker+b"\r")
                 if pos < 0:
                     pos=tail.rfind(b"\n"+marker+b"\n")
-                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
+                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:(?:linux|windows|macos)->)?(?:native|linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
                     time.sleep(.15)
                     guest.sendall(b"cat '#P/drivercandidates' | grep 'auto-bind=no' > /dev/null && echo RYZOVA_M0_PCI_OK\r")
                     bootstate["m0_probe_sent"]=True
@@ -451,7 +451,7 @@ with (OUT/"fresh-kernel-qemu-host.log").open("wb") as host:
                 pos=tail.rfind(b"\n"+marker+b"\r")
                 if pos < 0:
                     pos=tail.rfind(b"\n"+marker+b"\n")
-                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
+                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:(?:linux|windows|macos)->)?(?:native|linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
                     time.sleep(.15)
                     guest.sendall((runtime_commands[0]+"\r").encode())
                     bootstate["runtime_test"]=True
@@ -466,7 +466,7 @@ with (OUT/"fresh-kernel-qemu-host.log").open("wb") as host:
                 pos=tail.rfind(b"\n"+marker+b"\r")
                 if pos < 0:
                     pos=tail.rfind(b"\n"+marker+b"\n")
-                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
+                if pos >= 0 and re.search(rb"(?:^|\n)(?:term%|ryz\[(?:(?:linux|windows|macos)->)?(?:native|linux|windows|macos)\]>) ", tail[pos+len(marker)+1:]):
                     time.sleep(.15)
                     bootstate["runtime_stage"]=i+1
                     guest.sendall((runtime_commands[i+1]+"\r").encode())

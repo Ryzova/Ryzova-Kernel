@@ -205,7 +205,7 @@ def session(image,commands,out,label,timeout,required=None,resource=None,hardcut
                 tail=bytes(raw[-40000:])
                 if b'bootargs is ' in tail and not bootargs:client.sendall(boot_reply);bootargs=True
                 if bootargs and (b'user[glenda]:' in tail or b'user:' in tail) and not login:client.sendall(b'glenda\r');login=True
-                if login and b'term%' in tail and not sent:
+                if login and not sent and (stage > 0 or b'term%' in tail):
                     line=(commands[stage]+f'; echo CW6_STAGE_{stage}\r').encode()
                     # The emulated UART/guest console can lose burst input.
                     for offset in range(0,len(line),8):
@@ -238,7 +238,7 @@ def session(image,commands,out,label,timeout,required=None,resource=None,hardcut
                     if stage==len(commands)-1:completed=True;break
                     # Require the shell prompt after the standalone marker.
                     marker=re.search(rb'(?:^|\r?\n)CW6_STAGE_'+str(stage).encode()+rb'\r?\n',tail)
-                    if marker and b'term%' in tail[marker.end():]:stage+=1;sent=False
+                    if marker and re.search(rb'(?:^|\n)(?:term%|ryz\[[a-z]+(?:->[a-z]+)?\]>) ',tail[marker.end():]):stage+=1;sent=False
                 if proc.poll() is not None:break
         finally:
             if hardcut:proc.kill()
