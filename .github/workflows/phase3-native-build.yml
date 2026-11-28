@@ -89,6 +89,8 @@ jobs:
         run: python3 scripts/phase3-native-build.py native-build-overlay.qcow2
       - name: Verify H3 network adapter interchange
         run: python3 scripts/h3_network.py native-build-overlay.qcow2
+      - name: Exercise PS/2 and USB keyboards in the terminal editor
+        run: python3 scripts/h3_keyboards.py native-build-overlay.qcow2
       - name: Verify H2 file persistence across two storage controllers
         run: python3 scripts/h2_storage_reboot.py native-build-overlay.qcow2
       - name: Compare BusyBox report after guest reboot with Linux
