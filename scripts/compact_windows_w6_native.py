@@ -158,7 +158,7 @@ def verify_fault_fixture(log,sha):
         raise ValueError('fault-test PE missing or checksum mismatch after reboot')
     return True
 
-def session(image,commands,out,label,timeout,required=None,resource=None,hardcut=False,fault_config=None,boot_controller='scsi',net_model='virtio-net-pci'):
+def session(image,commands,out,label,timeout,required=None,resource=None,hardcut=False,fault_config=None,boot_controller='scsi',net_model='virtio-net-pci',keyboard=None,key_stages=None):
     raw=bytearray();socketdir=tempfile.TemporaryDirectory(prefix='cw6-');ser=Path(socketdir.name)/'serial'
     cmd=['qemu-system-x86_64','-machine','pc,accel=tcg','-cpu','qemu64','-m','2048','-smp','2','-device','virtio-scsi-pci,id=scsi',
          '-drive',f'if=none,id=vd0,file={image},format=qcow2','-device','scsi-hd,drive=vd0,scsi-id=0','-device',f'{net_model},netdev=n0','-netdev','user,id=n0',
@@ -171,6 +171,14 @@ def session(image,commands,out,label,timeout,required=None,resource=None,hardcut
         boot_reply = b'local!/dev/sdF0/fs\r'
     elif boot_controller != 'scsi':
         raise ValueError('unknown boot storage controller')
+    if keyboard is not None:
+        monitor = Path(socketdir.name) / 'monitor'
+        cmd[cmd.index('-monitor') + 1] = f'unix:{monitor},server=on,wait=off'
+        if keyboard == 'usb':
+            cmd[cmd.index('-machine') + 1] += ',i8042=off'
+            cmd.extend(['-device', 'qemu-xhci,id=h3usb', '-device', 'usb-kbd,bus=h3usb.0'])
+        elif keyboard != 'ps2':
+            raise ValueError('unknown keyboard')
     if resource is not None:
         if fault_config is None:cmd+=['-drive',f'if=none,id=cwres,file={resource},format=qcow2,cache=writeback']
         else:
@@ -202,6 +210,22 @@ def session(image,commands,out,label,timeout,required=None,resource=None,hardcut
                     # The emulated UART/guest console can lose burst input.
                     for offset in range(0,len(line),8):
                         client.sendall(line[offset:offset+8]);time.sleep(.01)
+                    if key_stages and stage in key_stages:
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as keys:
+                            keys.settimeout(5)
+                            keys.connect(str(monitor))
+                            def prompt():
+                                reply = bytearray()
+                                while not reply.endswith(b'(qemu) '):
+                                    chunk = keys.recv(4096)
+                                    if not chunk:
+                                        raise IOError('QEMU monitor disconnected')
+                                    reply.extend(chunk)
+                            prompt()
+                            for key in key_stages[stage]:
+                                keys.sendall(f'sendkey {key} 40\n'.encode())
+                                prompt()
+                                time.sleep(.08)
                     sent=True;print(label,'stage',stage,flush=True)
                 if sent and standalone(tail,f'CW6_STAGE_{stage}'):
                     if required and stage in required and not standalone(tail,required[stage]):raise RuntimeError(label+' failed: '+required[stage]+' '+bytes(raw[-10000:]).decode('utf-8','replace'))
