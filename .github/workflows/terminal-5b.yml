@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - scripts/ryz_build.py
+      - examples/terminal5c/**
+      - ryzova/compat/win32-source/**
       - examples/terminal5b/**
       - .github/workflows/terminal-5b.yml
 concurrency:
@@ -21,6 +23,8 @@ jobs:
           path: |
             scripts/ryz_build.py
             examples/terminal5b/
+            examples/terminal5c/
+            ryzova/compat/win32-source/
   build-and-run:
     needs: prepare
     strategy:
@@ -47,6 +51,14 @@ jobs:
           assert result.stdout.splitlines() == ["4f9f2cab"]
           assert subprocess.run([path, "missing.bin"]).returncode == 1
           assert subprocess.run([path]).returncode == 2
+      - name: Exercise Win32 directory contract
+        shell: python
+        run: |
+          import pathlib, subprocess, sys, tempfile
+          binary = subprocess.check_output([sys.executable, "scripts/ryz_build.py", "${{ matrix.target }}", "examples/terminal5c/directory.c", "--win32-source"], text=True).strip()
+          with tempfile.TemporaryDirectory() as workspace:
+              subprocess.run([pathlib.Path(binary).resolve()], cwd=workspace, check=True)
+              assert not list(pathlib.Path(workspace).iterdir())
       - name: Package CLI and verify a clean installation
         shell: python
         run: |
