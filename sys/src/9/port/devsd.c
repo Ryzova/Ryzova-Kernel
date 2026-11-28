@@ -1300,6 +1300,7 @@ sdread(Chan *c, void *a, long n, vlong off)
 						pp->name, pp->start, pp->end);
 			}
 		}
+		p = seprint(p, e, "binding %s %s\n", unit->dev->name, unit->dev->ifc->name);
 		qunlock(&unit->ctl);
 		poperror();
 		l = readstr(offset, a, n, buf);

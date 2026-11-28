@@ -17,6 +17,28 @@ fn ryz {
 			echo 'unknown Ryzova environment:' $2 >[1=2]
 			status=usage
 		}
+	case hw
+		if(~ $#* 2 && ~ $2 list){
+			for(ryzdisk in /dev/sd*){
+				if(test -e $ryzdisk/ctl) echo $ryzdisk
+			}
+		}
+		if not if(~ $#* 3 && ~ $2 info){
+			@{
+				for(ryzdisk in /dev/sd*){
+					if(~ $"3 $"ryzdisk && test -e $ryzdisk/ctl){
+						cat $ryzdisk/ctl
+						exit $status
+					}
+				}
+				echo 'unknown storage device:' $3 >[1=2]
+				exit unknown
+			}
+		}
+		if not {
+			echo 'usage: ryz hw list or ryz hw info /dev/sdUNIT' >[1=2]
+			status=usage
+		}
 	case run
 		shift
 		if(~ $#* 0){

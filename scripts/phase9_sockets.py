@@ -28,6 +28,8 @@ def commands(commit):
     for mode in CASES:ops.append(f'$c -j /tmp/sk-raw {mode} N_{mode}_{commit} && echo FLEX_SOCKET_{mode}_OK')
     ops += [
         '. /tmp/ryz-env && ryz env linux && echo RYZ_5D_ENV_OK',
+        "ryz hw list | grep -s '^/dev/sd00$' && echo RYZ_HW_LIST_OK",
+        "ryz hw info /dev/sd00 | grep '^binding sd0 virtio(10)?$' && echo RYZ_HW_BIND_OK",
         f'ryz run -j -b 4194304 $l /tmp/sk-http H_{commit} > /tmp/ryz-http-log && echo FLEX_HTTP_RUN_OK',
         'cat /tmp/ryz-http-log',
         f"cat /tmp/ryz-http-log | grep '^H_{commit}$' > /tmp/ryz-http-body",
@@ -47,6 +49,6 @@ def inspect(serial,commit,digests):
     for mode in CASES:checks[mode]=all(line(x,body) for x in (f'FLEX_SOCKETS_OK {mode}'.encode(),f'N_{mode}_{commit}'.encode(),f'FLEX_SOCKET_{mode}_OK'.encode()))
     checks['http']=all(line(x,body) for x in (b'FLEX_SOCKET_HTTP_OK',f'H_{commit}'.encode(),b'FLEX_HTTP_RUN_OK'))
     checks['terminal_workflow'] = all(line(marker, body) for marker in (
-        b'RYZ_5D_ENV_OK', b'RYZ_5D_PIPE_OK', b'RYZ_5D_ERROR_OK'))
+        b'RYZ_5D_ENV_OK', b'RYZ_5D_PIPE_OK', b'RYZ_5D_ERROR_OK', b'RYZ_HW_LIST_OK', b'RYZ_HW_BIND_OK'))
     checks['clean_results']=len(re.findall(rb'(?:^|\r?\n)COMPACT_LINUX_RESULT status=0 exited=1 exit=0 steps=[1-9][0-9]* syscalls=[1-9][0-9]*(?=\r?\n|$)',body))==len(CASES)+1
     return {'schema':'flex-linux-local-sockets/v1','source_commit':commit,'fixture_sha256':digests,'checks':checks,'passed':all(checks.values())}
