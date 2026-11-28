@@ -87,6 +87,10 @@ jobs:
           qemu-img create -f qcow2 -F qcow2 -b 9front.qcow2 native-build-overlay.qcow2
       - name: Transfer exact Git checkout kernel source and run Plan 9 mk
         run: python3 scripts/phase3-native-build.py native-build-overlay.qcow2
+      - name: Verify H3 network adapter interchange
+        run: python3 scripts/h3_network.py native-build-overlay.qcow2
+      - name: Exercise PS/2 and USB keyboards in the terminal editor
+        run: python3 scripts/h3_keyboards.py native-build-overlay.qcow2
       - name: Verify H2 file persistence across two storage controllers
         run: python3 scripts/h2_storage_reboot.py native-build-overlay.qcow2
       - name: Compare BusyBox report after guest reboot with Linux
@@ -111,6 +115,7 @@ jobs:
           name: phase3-native-build-evidence
           path: |
             artifacts/phase3/busybox-report*.log
+            artifacts/phase3/h3-*.log
             artifacts/phase3/h2-*.log
             artifacts/phase3/h2-storage.json
             artifacts/phase3/busybox-report.json
